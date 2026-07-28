@@ -1,0 +1,101 @@
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url 'https://jitpack.io' }
+    }
+}
+
+subprojects {
+    afterEvaluate { project ->
+        if (project.hasProperty('android')) {
+            project.android {
+                if (namespace == null) {
+                    switch (project.name) {
+                        case 'google_api_headers':
+                            namespace 'io.github.zeshuaro.google_api_headers'
+                            break
+                        case 'package_info_plus':
+                            namespace 'dev.fluttercommunity.plus.packageinfo'
+                            break
+                        case 'share_plus':
+                            namespace 'dev.fluttercommunity.plus.share'
+                            break
+                        case 'connectivity_plus':
+                            namespace 'dev.fluttercommunity.plus.connectivity'
+                            break
+                        case 'firebase_core':
+                            namespace 'io.flutter.plugins.firebase.core'
+                            break
+                        case 'firebase_auth':
+                            namespace 'io.flutter.plugins.firebase.auth'
+                            break
+                        case 'firebase_messaging':
+                            namespace 'io.flutter.plugins.firebase.messaging'
+                            break
+                        case 'cloud_firestore':
+                            namespace 'io.flutter.plugins.firebase.firestore'
+                            break
+                        case 'firebase_database':
+                            namespace 'io.flutter.plugins.firebase.database'
+                            break
+                        case 'firebase_storage':
+                            namespace 'io.flutter.plugins.firebase.storage'
+                            break
+                        case 'webview_flutter_android':
+                            namespace 'io.flutter.plugins.webviewflutter'
+                            break
+                        case 'image_picker_android':
+                            namespace 'io.flutter.plugins.imagepicker'
+                            break
+                        case 'path_provider_android':
+                            namespace 'io.flutter.plugins.pathprovider'
+                            break
+                        case 'shared_preferences_android':
+                            namespace 'io.flutter.plugins.sharedpreferences'
+                            break
+                        case 'url_launcher_android':
+                            namespace 'io.flutter.plugins.urllauncher'
+                            break
+                        case 'geolocator_android':
+                            namespace 'com.baseflow.geolocator'
+                            break
+                        case 'google_maps_flutter_android':
+                            namespace 'io.flutter.plugins.googlemaps'
+                            break
+                        case 'file_picker':
+                            namespace 'com.mr.flutter.plugin.filepicker'
+                            break
+                        default:
+                            def cleanedName = project.name.replace('-', '_')
+                            namespace "io.${cleanedName}"
+                    }
+                }
+                compileSdk 36
+                compileOptions {
+                    sourceCompatibility JavaVersion.VERSION_17
+                    targetCompatibility JavaVersion.VERSION_17
+                }
+            }
+            project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                compilerOptions {
+                    jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+                }
+            }
+        }
+    }
+}
+
+rootProject.buildDir = '../build'
+
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+
+subprojects {
+    project.evaluationDependsOn(':app')
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}

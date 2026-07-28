@@ -1,0 +1,18 @@
+Movigo Customer App - Final Release Checklist
+
+Version: 1.1.4+6
+Package: com.app.movigocustomer
+Signing: android/key.properties points to C:/Users/Administrator/Desktop/Movigo_app/youngdecade2025.jks
+Razorpay: backend-controlled; no hardcoded rzp_test/rzp_live placeholder in lib/
+Play Core: deprecated com.google.android.play:core:1.10.3 removed
+Photo/video permissions: READ_MEDIA_IMAGES / READ_MEDIA_VIDEO removed
+R8: SLF4J keep/dontwarn rules added
+Policies/About: added in app legal content
+
+Before building, ensure keystore exists:
+C:\Users\Administrator\Desktop\Movigo_app\youngdecade2025.jks
+
+Build:
+flutter clean
+flutter pub get
+flutter build appbundle --release

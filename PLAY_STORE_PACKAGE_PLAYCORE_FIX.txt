@@ -1,0 +1,11 @@
+Customer App Play Store fixes applied:
+
+1. Package/applicationId changed to com.app.movigocustomer to match existing Play Console listing.
+2. Removed deprecated com.google.android.play:core:1.10.3 dependency because Play Console blocks it with targetSdk 34+.
+3. Existing version remains 1.1.1+3. Increase versionCode if Play Console says code 3 is already used.
+4. Keystore path remains C:/Users/Administrator/Desktop/Movigo_app/youngdecade2025.jks.
+
+Build:
+flutter clean
+flutter pub get
+flutter build appbundle --release

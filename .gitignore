@@ -1,0 +1,66 @@
+# Secrets — never commit these
+android/key.properties
+ios/Runner/GoogleService-Info.plist
+android/app/google-services.json
+*.jks
+*.p12
+*.p8
+*.mobileprovision
+*.cer
+
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+*.g.dart
+
+# Android
+android/.gradle/
+android/.kotlin/
+android/captures/
+android/gradlew
+android/gradlew.bat
+android/local.properties
+android/**/GeneratedPluginRegistrant.java
+*.jar
+*.ap_
+*.aab
+*.apk
+
+# iOS / Xcode
+ios/Pods/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+ios/Flutter/flutter_export_environment.sh
+ios/ServiceDefinitions.json
+ios/Runner/GeneratedPluginRegistrant.*
+**/*.xcuserstate
+**/xcuserdata/
+*.moved-aside
+DerivedData/
+.build/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Claude Code local settings (machine-specific, not project source)
+.claude/settings.local.json
+
+# Misc build/log files already in this checkout
+build_log.txt
+build_log2.txt
+clean_log.txt
+retailer_run.log

@@ -1,0 +1,88 @@
+# Uncomment this line to define a global platform for your project
+platform :ios, '14.0'
+
+# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first"
+  end
+
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
+end
+
+require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+flutter_ios_podfile_setup
+
+target 'Runner' do
+  use_frameworks!
+
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_ios_build_settings(target)
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
+      config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+      if ['firebase_database', 'firebase_messaging'].include?(target.name)
+        config.build_settings['DEFINES_MODULE'] = 'NO'
+      end
+    end
+  end
+
+  # RazorpayStandard.xcframework ships only arm64 device/simulator slices (no
+  # x86_64 simulator support) and isn't actually required at runtime — Razorpay.framework's
+  # own binary only hard-depends on RazorpayCore, never RazorpayStandard, and no Swift
+  # source imports it directly. Strip it from every target's simulator link step (each pod
+  # target, plus the Pods-Runner/Pods-RunnerTests umbrellas, generates its own xcconfig with
+  # its own OTHER_LDFLAGS) so builds on Intel Mac simulators succeed; device/release builds
+  # are untouched since only the iphonesimulator-conditioned override is added.
+  support_files_dir = File.join(installer.sandbox.root, 'Target Support Files')
+  Dir.glob(File.join(support_files_dir, '*', '*.{debug,profile}.xcconfig')).each do |xcconfig_path|
+    lines = File.readlines(xcconfig_path)
+    other_ldflags_line = lines.find { |l| l.start_with?('OTHER_LDFLAGS = ') }
+    next unless other_ldflags_line && other_ldflags_line.include?('RazorpayStandard')
+
+    simulator_flags = other_ldflags_line.sub('OTHER_LDFLAGS = ', '').strip
+    simulator_flags = simulator_flags.sub(/^\$\(inherited\)\s*/, '')
+    simulator_flags = simulator_flags.gsub(/-framework "RazorpayStandard"\s*/, '')
+    File.open(xcconfig_path, 'a') do |f|
+      f.puts "OTHER_LDFLAGS[sdk=iphonesimulator*] = #{simulator_flags}"
+    end
+  end
+
+  # The generated embed-frameworks script also unconditionally copies
+  # RazorpayStandard.framework regardless of linking, which crashes
+  # (unbound variable) on simulator builds since that framework is never
+  # produced for x86_64 simulator. Skip just that call for simulator SDKs.
+  ['Pods-Runner', 'Pods-RunnerTests'].each do |target_name|
+    frameworks_script = File.join(support_files_dir, target_name, "#{target_name}-frameworks.sh")
+    next unless File.exist?(frameworks_script)
+
+    content = File.read(frameworks_script)
+    patched = content.gsub(
+      /^(\s*)install_framework "(\$\{PODS_XCFRAMEWORKS_BUILD_DIR\}\/razorpay-pod\/RazorpayStandard\.framework)"$/,
+      "\\1if [[ \"$PLATFORM_NAME\" != *simulator ]]; then\n\\1  install_framework \"\\2\"\n\\1fi"
+    )
+    File.write(frameworks_script, patched) if patched != content
+  end
+end

@@ -1,0 +1,27 @@
+MOVIGO PLAY STORE SIGNING INSTRUCTIONS
+
+The verified keystore SHA1 matches Play Console expected certificate:
+C6:AF:35:7F:04:29:BA:5E:C4:0B:25:69:F2:45:14:01:EB:75:15:52
+
+Before building AAB, place the keystore file here:
+C:/Users/Administrator/Desktop/Movigo_app/youngdecade2025.jks
+
+Both apps now include:
+android/key.properties
+
+Build commands:
+
+Customer App:
+cd C:\Users\Administrator\Desktop\Movigo_app\Customer_app
+flutter clean
+flutter pub get
+flutter build appbundle --release
+
+Driver App:
+cd C:\Users\Administrator\Desktop\Movigo_app\Drivers_app
+flutter clean
+flutter pub get
+flutter build appbundle --release
+
+AAB output path:
+build/app/outputs/bundle/release/app-release.aab
