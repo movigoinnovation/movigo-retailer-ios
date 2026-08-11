@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>372136199151-nhieqnau1s6c192oabldrh73pksauvqt.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.372136199151-nhieqnau1s6c192oabldrh73pksauvqt</string>
+	<key>ANDROID_CLIENT_ID</key>
+	<string>372136199151-3ughi2djg9qs203tm164g89jm12lr9j5.apps.googleusercontent.com</string>
+	<key>API_KEY</key>
+	<string>AIzaSyDbd8CNUpBsJp_9lsbtJqyxyPwYrG5O0xc</string>
+	<key>GCM_SENDER_ID</key>
+	<string>372136199151</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.app.movigoinnovations.retailer</string>
+	<key>PROJECT_ID</key>
+	<string>movigo-b3025</string>
+	<key>STORAGE_BUCKET</key>
+	<string>movigo-b3025.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:372136199151:ios:77162cfea631ffc995ec1a</string>
+</dict>
+</plist>

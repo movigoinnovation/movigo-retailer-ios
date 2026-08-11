@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "372136199151",
+    "project_id": "movigo-b3025",
+    "storage_bucket": "movigo-b3025.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:372136199151:android:9985a5e55e30690e95ec1a",
+        "android_client_info": {
+          "package_name": "com.app.movigocustomer"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDN5olaXGDndOZFy22SVRGAzCgrcTI141M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
