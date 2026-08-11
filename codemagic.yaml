@@ -1,0 +1,69 @@
+workflows:
+  ios-release:
+    name: iOS Release (Movigo Retailer)
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    integrations:
+      # Name of the App Store Connect API key integration configured in the
+      # Codemagic dashboard (Teams > Integrations > App Store Connect).
+      # CHANGE_ME to match whatever name you give the integration there.
+      app_store_connect: codemagic_api_key
+
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.app.movigoinnovations.retailer
+      vars:
+        BUNDLE_ID: "com.app.movigoinnovations.retailer"
+        # App Store Connect "Apple ID" (numeric App ID) for this app.
+        # CHANGE_ME — required for TestFlight/App Store publishing.
+        APP_STORE_APPLE_ID: 0000000000
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+      cancel_previous_builds: true
+
+    scripts:
+      - name: Get Flutter packages
+        script: flutter pub get
+
+      - name: Install CocoaPods dependencies
+        script: |
+          find . -name "Podfile" -maxdepth 2 -execdir pod install \;
+
+      - name: Set up code signing settings on Xcode project
+        script: xcode-project use-profiles
+
+      - name: Flutter build ipa
+        script: |
+          flutter build ipa --release \
+            --export-options-plist=/Users/builder/export_options.plist
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - flutter_drive.log
+
+    publishing:
+      email:
+        recipients:
+          # CHANGE_ME — add the email(s) that should receive build notifications.
+          - your-email@example.com
+        notify:
+          success: true
+          failure: true
+
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        # Set to true once you're ready to submit builds for App Store review.
+        submit_to_app_store: false
