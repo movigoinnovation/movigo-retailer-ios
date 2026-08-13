@@ -5,10 +5,9 @@ workflows:
     instance_type: mac_mini_m2
 
     integrations:
-      # Name of the App Store Connect API key integration configured in the
-      # Codemagic dashboard (Teams > Integrations > App Store Connect).
-      # CHANGE_ME to match whatever name you give the integration there.
-      app_store_connect: codemagic_api_key
+      # Name of the Apple Developer Portal / App Store Connect API key
+      # integration configured in the Codemagic dashboard.
+      app_store_connect: codemagic-retailer-ios1
 
     environment:
       flutter: stable
