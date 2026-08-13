@@ -73,6 +73,9 @@ dependency_overrides:
 flutter:
   uses-material-design: true
 
+  config:
+    enable-swift-package-manager: false
+
   assets:
     - assets/icons/
 
