@@ -18,9 +18,7 @@ workflows:
         bundle_identifier: com.app.movigoinnovations.retailer
       vars:
         BUNDLE_ID: "com.app.movigoinnovations.retailer"
-        # App Store Connect "Apple ID" (numeric App ID) for this app.
-        # CHANGE_ME — required for TestFlight/App Store publishing.
-        APP_STORE_APPLE_ID: 0000000000
+        APP_STORE_APPLE_ID: 6793887251
 
     triggering:
       events:
@@ -63,6 +61,5 @@ workflows:
 
       app_store_connect:
         auth: integration
-        submit_to_testflight: true
-        # Set to true once you're ready to submit builds for App Store review.
-        submit_to_app_store: false
+        submit_to_testflight: false
+        submit_to_app_store: true
