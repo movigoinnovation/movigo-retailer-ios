@@ -84,6 +84,13 @@ Map<String, dynamic>? _handleStatusCode(
   }
 
   if (statusCode == 401 || statusCode == 403) {
+    // A guest (no token yet) hitting an account-gated endpoint isn't a
+    // "session expired" — there was never a session to expire. Let the
+    // calling provider's own empty/error fallback handle it quietly
+    // instead of yanking a browsing guest back to the login screen.
+    if (AppConstant.token.isEmpty) {
+      return null;
+    }
     if (context != null) {
       // force_logout = true means another device logged in → wipe local session
       // Regular 401 (transient/race-condition) → redirect but keep cache so next app-start works
