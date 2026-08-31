@@ -27,6 +27,7 @@ import 'package:movigo/view/customer_screen/create_booking_screen/booking_detail
 import 'package:movigo/view/customer_screen/create_booking_screen/cancel_ride_screen.dart';
 import 'package:movigo/view/customer_screen/create_booking_screen/finding_driver_screen.dart';
 import 'package:movigo/view/customer_screen/new_booking_flow/route_vehicle_screen.dart';
+import 'package:movigo/view/customer_screen/onboarding/login_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RetailerConfirmScreen  — Version 1
@@ -392,6 +393,18 @@ class _RetailerConfirmScreenState extends State<RetailerConfirmScreen> {
 
   Future<void> _confirmBooking() async {
     if (_isBooking) return;
+
+    // Guests can browse vehicle types/pricing without an account, but
+    // placing an actual booking is an account-based action (it's billed to
+    // a wallet/business profile) — send them to log in here instead of
+    // letting the create-booking API call fail silently on an empty token.
+    if (AppConstant.token.isEmpty) {
+      final loggedIn = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(builder: (_) => LoginScreen(userType: 'Retailer')),
+      );
+      if (loggedIn != true || AppConstant.token.isEmpty) return;
+    }
+
     if (!_validate()) return;
     setState(() => _isBooking = true);
     try {

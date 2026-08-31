@@ -14,6 +14,7 @@ import 'package:movigo/utilities/app_constant.dart';
 import 'package:movigo/utilities/app_font.dart';
 import 'package:movigo/utilities/app_language.dart';
 import 'package:movigo/utilities/app_button.dart';
+import 'package:movigo/utilities/app_footer.dart';
 import 'package:movigo/utilities/app_snackbar_toast_message.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -260,6 +261,38 @@ class _LoginScreenState extends State<LoginScreen> {
                                   },
                                 );
                         },
+                      ),
+
+                      SizedBox(height: size.height * 0.025),
+
+                      // Guest browsing: lets people look around the app
+                      // (vehicle types, pricing, etc.) without registering
+                      // first. Booking/payment/account screens still ask
+                      // for login when the user actually needs them.
+                      Center(
+                        child: TextButton(
+                          onPressed: () {
+                            Navigator.of(context).pushAndRemoveUntil(
+                              MaterialPageRoute(
+                                builder: (_) => const CustomBottomNav(
+                                  userType: UserType.retailer,
+                                  initialIndex: 0,
+                                ),
+                              ),
+                              (route) => false,
+                            );
+                          },
+                          child: Text(
+                            'Continue as Guest',
+                            style: const TextStyle(
+                              fontFamily: AppFont.fontFamily,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: AppColor.themeColor,
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
+                        ),
                       ),
                     ],
                   ),

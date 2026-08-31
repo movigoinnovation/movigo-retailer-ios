@@ -110,8 +110,11 @@ class _CoinWalletScreenState extends State<CoinWalletScreen> {
   Future<void> _showIntroSheet() async {
     await showModalBottomSheet(
       context: context,
-      isScrollControlled: false,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.9,
+      ),
       builder: (_) => const _CoinsIntroSheet(),
     );
     final prefs = await SharedPreferences.getInstance();
@@ -1222,8 +1225,16 @@ class _CoinsIntroSheet extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
-      child: Column(
+      // isScrollControlled lets this sheet grow to fit its content instead of
+      // being capped at a fixed fraction of the screen height, and wrapping
+      // in SingleChildScrollView means that if it's ever still taller than
+      // the screen (e.g. large accessibility text), it scrolls instead of
+      // overflowing off the bottom edge.
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+          24, 12, 24, 32 + MediaQuery.of(context).padding.bottom,
+        ),
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
@@ -1299,6 +1310,7 @@ class _CoinsIntroSheet extends StatelessWidget {
             ),
           ),
         ],
+        ),
       ),
     );
   }

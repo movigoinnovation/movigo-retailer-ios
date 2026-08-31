@@ -20,6 +20,7 @@ import 'package:movigo/utilities/app_font.dart';
 import 'package:movigo/utilities/app_footer.dart';
 import 'package:movigo/utilities/app_image.dart';
 import 'package:movigo/utilities/app_language.dart';
+import 'package:movigo/utilities/app_snackbar_toast_message.dart';
 import 'about_us_screen.dart';
 import 'help_and_support_screen.dart';
 
@@ -261,6 +262,52 @@ class _RAccountScreenState extends State<RAccountScreen> {
                     onTap: () {
                       logoutPopup(context);
                     },
+                  ),
+                  SizedBox(height: size.height * 0.01),
+
+                  /// DELETE ACCOUNT
+                  Padding(
+                    padding: EdgeInsets.only(bottom: size.height * 0.02),
+                    child: InkWell(
+                      onTap: () async {
+                        final uri = Uri.parse(
+                            'https://movigoinnovations.com/delete-account.html');
+                        try {
+                          await launchUrl(uri, mode: LaunchMode.externalApplication);
+                        } catch (_) {
+                          if (context.mounted) {
+                            SnackBarToastMessage.showSnackBar(
+                                context, 'Could not open the delete account page.');
+                          }
+                        }
+                      },
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.delete_outline_rounded,
+                            size: size.height * 0.030,
+                            color: Colors.red.shade600,
+                          ),
+                          SizedBox(width: size.width * 0.04),
+                          Expanded(
+                            child: Text(
+                              'Delete Account',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                fontFamily: AppFont.fontFamily,
+                                color: Colors.red.shade600,
+                              ),
+                            ),
+                          ),
+                          Image.asset(
+                            AppImage.arrowAcc,
+                            height: 16,
+                            width: 16,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
 
                   SizedBox(height: size.height * 0.04),
