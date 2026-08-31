@@ -32,6 +32,8 @@
 	<string>Camera access is needed to take photos for your profile and bookings.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Contacts access is needed so you can pick a receiver or sender from your contacts.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Location access is needed to auto-fill your current location as the pickup point and to show live driver tracking.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Location access is needed to auto-fill your current location as the pickup point and to show live driver tracking.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
