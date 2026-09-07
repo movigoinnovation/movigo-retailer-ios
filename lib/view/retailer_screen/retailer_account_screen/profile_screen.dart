@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:dotted_border/dotted_border.dart';
 import 'dart:convert';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -104,18 +103,6 @@ class _RProfileScreenState extends State<RProfileScreen> {
     }
   }
 
-  Future<bool> _requestCameraPermission() async {
-    final status = await Permission.camera.status;
-    if (status.isGranted) return true;
-    final result = await Permission.camera.request();
-    if (result.isGranted) return true;
-    if (mounted) {
-      SnackBarToastMessage.showSnackBar(
-          context, 'Please allow camera access in Settings.');
-    }
-    return false;
-  }
-
   void _pickImage() {
     showModalBottomSheet(
       context: context,
@@ -129,14 +116,11 @@ class _RProfileScreenState extends State<RProfileScreen> {
               color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2))),
           const SizedBox(height: 12),
           ListTile(
-            leading: const Icon(Icons.camera_alt_rounded, color: AppColor.themeColor),
-            title: const Text('Camera', style: TextStyle(fontFamily: AppFont.fontFamily)),
-            onTap: () async {
-              Navigator.pop(context);
-              if (!await _requestCameraPermission()) return;
-              final x = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 60);
-              if (x != null && mounted) setState(() => _profileImage = File(x.path));
-            },
+            enabled: false,
+            leading: Icon(Icons.camera_alt_rounded, color: AppColor.themeColor.withOpacity(0.4)),
+            title: Text('Camera',
+                style: TextStyle(fontFamily: AppFont.fontFamily, color: Colors.grey.shade400)),
+            subtitle: const Text('Adding soon', style: TextStyle(fontFamily: AppFont.fontFamily)),
           ),
           ListTile(
             leading: const Icon(Icons.photo_library_rounded, color: AppColor.themeColor),

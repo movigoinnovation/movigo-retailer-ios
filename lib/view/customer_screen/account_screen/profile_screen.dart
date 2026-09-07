@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:dotted_border/dotted_border.dart';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:image_cropper/image_cropper.dart';
@@ -125,37 +124,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     return success;
-  }
-
-  Future<bool> _requestCameraPermission() async {
-    final status = await Permission.camera.status;
-    if (status.isGranted) return true;
-    final result = await Permission.camera.request();
-    if (result.isGranted) return true;
-    if (mounted) {
-      SnackBarToastMessage.showSnackBar(
-          context, 'Please allow camera access in Settings.');
-    }
-    return false;
-  }
-
-  Future<void> _imgFromCamera() async {
-    if (!await _requestCameraPermission()) return;
-    final XFile? image = await ImagePicker().pickImage(
-      source: ImageSource.camera,
-      maxHeight: 450,
-      maxWidth: 450,
-      imageQuality: 50,
-    );
-
-    if (image != null) {
-      final imageFile = File(image.path);
-      final croppedImage = await cropImage(imageFile);
-      setState(() {
-        _profileImage = croppedImage;
-        fileName = image.path.split('/').last;
-      });
-    }
   }
 
   Future<void> _imgFromGallery() async {
@@ -390,12 +358,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                 ),
+                // Camera capture is disabled for now (shipped as "adding
+                // soon") — the in-app camera flow was unresponsive and got
+                // the app rejected under App Store Guideline 2.1(a).
+                // Gallery upload above still works.
                 GestureDetector(
-                  onTap: () {
-                    _imgFromCamera();
-                    setState(() {});
-                    Navigator.of(context).pop();
-                  },
+                  onTap: () => Navigator.of(context).pop(),
                   child: Container(
                     color: AppColor.transparentColor,
                     child: Padding(
@@ -409,7 +377,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           SizedBox(
                             width: MediaQuery.of(context).size.width * 5 / 100,
                           ),
-                          Container(
+                          Opacity(
+                            opacity: 0.4,
                             child: SizedBox(
                               width:
                                   MediaQuery.of(context).size.width * 8 / 100,
@@ -426,11 +395,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ),
                           Text(
                             AppLanguage.cameraText[language],
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontFamily: AppFont.fontFamily,
                               fontSize: 16,
                               fontWeight: FontWeight.w500,
-                              color: AppColor.primaryColor,
+                              color: Colors.grey.shade400,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Adding soon',
+                            style: TextStyle(
+                              fontFamily: AppFont.fontFamily,
+                              fontSize: 12,
+                              color: Colors.grey.shade400,
                             ),
                           ),
                         ],
