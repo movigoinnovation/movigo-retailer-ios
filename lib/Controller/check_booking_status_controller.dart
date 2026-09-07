@@ -15,6 +15,9 @@ class CheckBookingStatusController with ChangeNotifier {
   String? _assignedDriverId;
   String? get assignedDriverId => _assignedDriverId;
 
+  Map<String, dynamic>? _pickupLocation;
+  Map<String, dynamic>? get pickupLocation => _pickupLocation;
+
   bool get isTerminalStatus {
     final status = (_bookingStatus ?? '').trim().toLowerCase();
     return status == 'delivered' ||
@@ -56,21 +59,27 @@ class CheckBookingStatusController with ChangeNotifier {
           } else {
             _assignedDriverId = driver?.toString();
           }
+          _pickupLocation = data['pickup_location'] is Map
+              ? Map<String, dynamic>.from(data['pickup_location'] as Map)
+              : null;
         } else {
           _isDriverAccepted = false;
           _bookingStatus = null;
           _assignedDriverId = null;
+          _pickupLocation = null;
         }
       } else {
         _isDriverAccepted = null;
         _bookingStatus = null;
         _assignedDriverId = null;
+        _pickupLocation = null;
       }
     } catch (e) {
       debugPrint('❌ Check Booking Status Error: $e');
       _isDriverAccepted = null;
       _bookingStatus = null;
       _assignedDriverId = null;
+      _pickupLocation = null;
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -82,6 +91,7 @@ class CheckBookingStatusController with ChangeNotifier {
     _isDriverAccepted = null;
     _bookingStatus = null;
     _assignedDriverId = null;
+    _pickupLocation = null;
     _isLoading = false;
     notifyListeners();
   }

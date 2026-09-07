@@ -84,6 +84,7 @@ class AppImage {
   static const applogo = './assets/icons/movigo_app_logo.png';
   static const applogo2 = './assets/icons/movigo_app_logo2.png';
   static const applogo3 = './assets/icons/movigo_logo3.png';
+  static const animatedTruckIcon = './assets/icons/delivery_truck_animated.png';
 
   ///parinay 12-01-2025
   static const onlinetoggleIcon = './assets/icons/onlinetoggle.png';
@@ -100,6 +101,22 @@ class AppImage {
   static const cameraImgIcon = "./assets/icons/ic_camera.png";
   static const galleryImgIcon = "./assets/icons/ic_gallery.png";
   static const rajwadaPalace = './assets/icons/rajwada_palace.png';
+  static const threeDPinBox = './assets/icons/three_d_pin_box.jpg';
+  static const threeDCargoVan = './assets/icons/three_d_cargo_van.jpg';
+  static const threeDScooter = './assets/icons/three_d_scooter.jpg';
+  static const threeDEloader = './assets/icons/three_d_eloader.jpg';
+  static const threeDDiesel3w = './assets/icons/three_d_diesel3w.jpg';
+  static const threeDTataace = './assets/icons/three_d_tataace.jpg';
+  static const threeDBike = './assets/icons/three_d_bike.jpg';
+  static const threeDBoxes = './assets/icons/three_d_boxes.jpg';
+  static const topViewBike = './assets/icons/top_view_bike.png';
 
-  //
+  // Vehicle dimension graphics
+  static const dimScooter = './assets/icons/dim_scooter.png';
+  static const dim2Wheeler = './assets/icons/dim_2_wheeler.png';
+  static const dimMini3W = './assets/icons/dim_mini_3w.png';
+  static const dimELoader = './assets/icons/dim_e_loader.png';
+  static const dim3Wheeler = './assets/icons/dim_3_wheeler.png';
+  static const dimTataAce = './assets/icons/dim_tata_ace.png';
+  static const goldCoinReward = './assets/icons/gold_coin_reward.png';
 }

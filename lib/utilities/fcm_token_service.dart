@@ -26,6 +26,13 @@ class FcmTokenService {
     if (token != null && token.isNotEmpty) {
       AppConstant.playerID = token;
       debugPrint('FCM token: ${AppConstant.playerID}');
+      // Push it to the backend right away instead of relying solely on
+      // updateTokenAfterLogin() — that's called from the splash screen's
+      // fast, synchronous cached-login path, which reliably finishes
+      // *before* this async Firebase/permission-dialog/getToken() chain
+      // does. That one-shot check was silently no-op'ing on every normal
+      // launch, leaving player_id stuck at the "123456" placeholder forever.
+      await _updateTokenOnBackend(token);
     }
 
     _setupForegroundMessageHandler();
@@ -47,7 +54,15 @@ class FcmTokenService {
   }
 
   static Future<void> _updateTokenOnBackend(String token) async {
-    if (AppConstant.token.isEmpty || token.isEmpty || token == '123456') return;
+    if (token.isEmpty || token == '123456') return;
+    // The auth token is normally already restored from cache by the time
+    // this runs (that's fast/synchronous; FCM setup is not), but guard
+    // against the reverse race by waiting briefly instead of a one-shot
+    // check that silently drops the update.
+    for (int i = 0; i < 10 && AppConstant.token.isEmpty; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    if (AppConstant.token.isEmpty) return;
     try {
       await http.post(
         Uri.parse('${AppConfigProvider.apiUrl}user/update_fcm_token'),
@@ -68,7 +83,14 @@ class FcmTokenService {
   }) async {
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        return await messaging.getToken();
+        final t = await messaging.getToken().timeout(
+          const Duration(seconds: 15),
+          onTimeout: () {
+            debugPrint('FCM getToken attempt $attempt timed out after 15s');
+            return null;
+          },
+        );
+        if (t != null) return t;
       } on PlatformException catch (e) {
         debugPrint('FCM getToken PlatformException attempt $attempt: ${e.code}');
       } catch (e) {

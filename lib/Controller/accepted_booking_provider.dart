@@ -10,11 +10,14 @@ class AcceptedBookingController with ChangeNotifier {
   bool _isLoadingMore = false;
   bool get isLoadingMore => _isLoadingMore;
 
-  final int _limit = 10;
+  final int _limit = 20;
 
   /// all | accepted | ongoing | upcoming | completed | cancelled
   String _currentBookingKey = 'all';
   String get currentBookingKey => _currentBookingKey;
+
+  String _currentSearch = '';
+  String get currentSearch => _currentSearch;
 
   // Booking keys for which the last page has already been fetched.
   final Set<String> _exhausted = {};
@@ -60,8 +63,10 @@ class AcceptedBookingController with ChangeNotifier {
     required String
         bookingKey, // all | accepted | ongoing | upcoming | completed | cancelled
     bool isPagination = false,
+    String? search,
   }) async {
     _currentBookingKey = bookingKey;
+    if (search != null) _currentSearch = search.trim();
 
     if (!isPagination) {
       _isLoading = true;
@@ -114,6 +119,7 @@ class AcceptedBookingController with ChangeNotifier {
           'booking_key': bookingKey,
           'page': _getCurrentPage(bookingKey),
           'limit': _limit,
+          if (_currentSearch.isNotEmpty) 'search': _currentSearch,
         },
       );
 
@@ -198,6 +204,7 @@ class AcceptedBookingController with ChangeNotifier {
 
     _exhausted.clear();
     _currentBookingKey = 'all';
+    _currentSearch = '';
     _isLoading = false;
     _isLoadingMore = false;
 

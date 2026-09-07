@@ -11,6 +11,7 @@ import 'package:movigo/utilities/app_color.dart';
 import 'package:movigo/utilities/app_constant.dart';
 import 'package:movigo/utilities/app_font.dart';
 import 'package:movigo/helper/geocoding_utils.dart';
+import 'package:movigo/helper/places_session_token.dart';
 
 class LocationPickerField extends StatefulWidget {
   final TextEditingController controller;
@@ -38,6 +39,9 @@ class _LocationPickerFieldState extends State<LocationPickerField> {
   Timer? _debounce;
   bool _showSuggestions = false;
   bool _isLoadingSuggestions = false;
+  // Bundles an Autocomplete typing sequence + its terminating Details call
+  // into one billed Places session instead of billing every request alone.
+  String? _sessionToken;
 
   @override
   void initState() {
@@ -150,6 +154,7 @@ class _LocationPickerFieldState extends State<LocationPickerField> {
     }
 
     setState(() => _isLoadingSuggestions = true);
+    _sessionToken ??= PlacesSessionToken.generate();
 
     try {
       final url = Uri.parse(
@@ -159,6 +164,7 @@ class _LocationPickerFieldState extends State<LocationPickerField> {
         '&radius=50000'
         '&strictbounds=true'
         '&components=country:IN'
+        '&sessiontoken=$_sessionToken'
         '&key=${AppConstant.googleApiKey}',
       );
 
@@ -196,19 +202,22 @@ class _LocationPickerFieldState extends State<LocationPickerField> {
           'https://maps.googleapis.com/maps/api/place/details/json'
           '?place_id=${place['place_id']}'
           '&fields=geometry,formatted_address'
+          '&sessiontoken=$_sessionToken'
           '&key=${AppConstant.googleApiKey}',
         );
+        // Details call ends the session — next search starts a fresh one.
+        _sessionToken = null;
 
         final response = await http.get(url);
-        
+
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
-          
+
           if (data['status'] == 'OK') {
             final geometry = data['result']['geometry'];
             final location = geometry['location'];
             final address = data['result']['formatted_address'];
-            
+
             _finishSelection(address, location['lat'], location['lng']);
           }
         }
@@ -336,6 +345,7 @@ class _LocationPickerFieldState extends State<LocationPickerField> {
                       icon: const Icon(Icons.clear, color: Colors.grey, size: 20),
                       onPressed: () {
                         widget.controller.clear();
+                        _sessionToken = null;
                         setState(() {
                           _suggestions = [];
                         });

@@ -9,6 +9,7 @@ import 'package:movigo/utilities/app_color.dart';
 import 'package:movigo/utilities/app_font.dart';
 import 'package:movigo/utilities/rect_shimmer.dart';
 import 'package:movigo/view/customer_screen/coins/coin_scratch_card_screen.dart';
+import 'package:movigo/view/customer_screen/coins/coin_missions_screen.dart' show MissionCard;
 
 class CoinWalletScreen extends StatefulWidget {
   const CoinWalletScreen({super.key});
@@ -24,6 +25,10 @@ class _CoinWalletScreenState extends State<CoinWalletScreen> {
   Future<List<Map<String, dynamic>>>? _historyFuture;
   Future<List<Map<String, dynamic>>>? _redeemRequestsFuture;
 
+  bool _missionsLoading = true;
+  List<Map<String, dynamic>> _missions = [];
+  String? _claimingMissionId;
+
   static const int minCashRedeem = 50;
 
   @override
@@ -33,6 +38,37 @@ class _CoinWalletScreenState extends State<CoinWalletScreen> {
     _loadBalance();
     _historyFuture = _loadHistory();
     _redeemRequestsFuture = _loadRedeemRequests();
+    _loadMissions();
+  }
+
+  Future<void> _loadMissions() async {
+    final provider = Provider.of<PostApiProvider>(context, listen: false);
+    final res = await provider.getCoinMissionsApi(context);
+    if (!mounted) return;
+    setState(() {
+      _missionsLoading = false;
+      _missions = List<Map<String, dynamic>>.from(res?['data'] ?? []);
+    });
+  }
+
+  Future<void> _claimMission(Map<String, dynamic> mission) async {
+    final id = mission['_id']?.toString() ?? '';
+    if (id.isEmpty || _claimingMissionId != null) return;
+    setState(() => _claimingMissionId = id);
+    final provider = Provider.of<PostApiProvider>(context, listen: false);
+    final res = await provider.claimCoinMissionApi(context, missionId: id);
+    if (!mounted) return;
+    setState(() => _claimingMissionId = null);
+
+    final bool success = res?['success'] == true;
+    final String message = ((res?['message'] as List?)?.isNotEmpty == true)
+        ? res!['message'][0].toString()
+        : (success ? 'Reward claimed' : 'Something went wrong');
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    if (success) {
+      await _loadMissions();
+      await _loadBalance();
+    }
   }
 
   Future<void> _loadBalance() async {
@@ -65,6 +101,7 @@ class _CoinWalletScreenState extends State<CoinWalletScreen> {
 
   Future<void> _refreshAll() async {
     await _loadBalance();
+    await _loadMissions();
     setState(() {
       _historyFuture = _loadHistory();
       _redeemRequestsFuture = _loadRedeemRequests();
@@ -112,45 +149,115 @@ class _CoinWalletScreenState extends State<CoinWalletScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.9,
-      ),
       builder: (_) => const _CoinsIntroSheet(),
     );
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('coins_intro_shown', true);
   }
 
+  Future<void> _showHowToUseSheet() async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40, height: 4,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                _HowToUseCard(),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
-      appBar: AppBar(
-        backgroundColor: AppColor.themeColor,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded,
-              color: Colors.white, size: 20),
-          onPressed: () => Navigator.pop(context),
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 16, 8),
+              child: Row(
+                children: [
+                  InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: () => Navigator.pop(context),
+                    child: const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Icon(Icons.arrow_back_rounded, color: Color(0xFF0F172A), size: 22),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Expanded(
+                    child: Text(
+                      'Coins Wallet',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF0F172A),
+                        fontFamily: AppFont.fontFamily,
+                      ),
+                    ),
+                  ),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: _showHowToUseSheet,
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      margin: const EdgeInsets.only(right: 6),
+                      decoration: BoxDecoration(
+                        color: AppColor.themeColor.withOpacity(0.08),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.menu_book_rounded, color: AppColor.themeColor, size: 20),
+                    ),
+                  ),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: _showIntroSheet,
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppColor.themeColor.withOpacity(0.08),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.info_outline_rounded, color: AppColor.themeColor, size: 20),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(child: _body()),
+          ],
         ),
-        title: const Text(
-          'Coins Wallet',
-          style: TextStyle(
-            color: Colors.white,
-            fontFamily: AppFont.fontFamily,
-            fontWeight: FontWeight.w600,
-            fontSize: 18,
-          ),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.info_outline_rounded,
-                color: Colors.white70, size: 22),
-            onPressed: _showIntroSheet,
-          ),
-        ],
       ),
-      body: _loading
+    );
+  }
+
+  Widget _body() {
+    return _loading
           ? const Center(child: CircularProgressIndicator(color: AppColor.themeColor))
           : RefreshIndicator(
               onRefresh: _refreshAll,
@@ -161,15 +268,26 @@ class _CoinWalletScreenState extends State<CoinWalletScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _HeroBalanceCard(data: _data),
-                    const SizedBox(height: 12),
-                    _RedeemForCashButton(
-                      coinBalance: (_data?['coin_balance'] ?? 0) as int,
-                      minCoins: minCashRedeem,
-                      onTap: _openRedeemSheet,
+                    FutureBuilder<List<Map<String, dynamic>>>(
+                      future: _historyFuture,
+                      builder: (context, snapshot) {
+                        // Lifetime Earning must be the TRUE all-time total,
+                        // so it's summed from the full, unfiltered history
+                        // (getCoinsHistoryApi) — not from the balance API's
+                        // `transactions` field, which only lists currently
+                        // non-expired coins and would otherwise silently
+                        // shrink as 30-day-old coins expire.
+                        final int lifetimeEarning = (snapshot.data ?? [])
+                            .where((t) => t['type'] != 'redeemed')
+                            .fold<int>(0, (s, t) => s + ((t['coins'] ?? 0) as num).toInt());
+                        return _HeroBalanceCard(
+                          data: _data,
+                          lifetimeEarning: lifetimeEarning,
+                          minRedeemCoins: minCashRedeem,
+                          onRedeemTap: _openRedeemSheet,
+                        );
+                      },
                     ),
-                    const SizedBox(height: 16),
-                    _MilestoneProgressCard(data: _data),
                     if (_pendingCards.isNotEmpty) ...[
                       const SizedBox(height: 16),
                       _PendingScratchCardsSection(
@@ -178,35 +296,268 @@ class _CoinWalletScreenState extends State<CoinWalletScreen> {
                       ),
                     ],
                     const SizedBox(height: 16),
-                    _HowToUseCard(),
-                    const SizedBox(height: 16),
-                    FutureBuilder<List<Map<String, dynamic>>>(
-                      future: _redeemRequestsFuture,
-                      builder: (context, snapshot) {
-                        final requests = snapshot.data ?? [];
-                        if (requests.isEmpty) return const SizedBox.shrink();
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: _RedeemRequestsSection(requests: requests),
-                        );
-                      },
+                    _InlineMissionsSection(
+                      loading: _missionsLoading,
+                      missions: _missions,
+                      claimingId: _claimingMissionId,
+                      onClaim: _claimMission,
                     ),
-                    const SizedBox(height: 20),
-                    FutureBuilder<List<Map<String, dynamic>>>(
-                      future: _historyFuture,
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState == ConnectionState.waiting) {
-                          return const _HistoryShimmer();
-                        }
-                        return _TransactionHistory(
-                          transactions: snapshot.data ?? [],
-                        );
-                      },
+                    const SizedBox(height: 16),
+                    _NavButton(
+                      icon: Icons.receipt_long_rounded,
+                      label: 'Transaction History',
+                      subtitle: 'View all your coin transactions',
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => _TransactionHistoryScreen(future: _historyFuture),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _NavButton(
+                      icon: Icons.local_offer_rounded,
+                      label: 'Cash Redemption Requests',
+                      subtitle: 'View your past redemption requests',
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => _RedeemRequestsScreen(future: _redeemRequestsFuture),
+                        ),
+                      ),
                     ),
                   ],
                 ),
               ),
+            );
+  }
+}
+
+// ── Inline Missions Section (embedded directly on the wallet page) ────────────
+
+class _InlineMissionsSection extends StatelessWidget {
+  final bool loading;
+  final List<Map<String, dynamic>> missions;
+  final String? claimingId;
+  final Future<void> Function(Map<String, dynamic> mission) onClaim;
+
+  const _InlineMissionsSection({
+    required this.loading,
+    required this.missions,
+    required this.claimingId,
+    required this.onClaim,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Missions', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, fontFamily: AppFont.fontFamily, color: AppColor.blackColor)),
+        const SizedBox(height: 10),
+        if (loading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(child: CircularProgressIndicator(color: AppColor.themeColor)),
+          )
+        else if (missions.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFFECEFF3)),
             ),
+            child: const Text(
+              'No missions available right now — check back soon for new coin rewards',
+              style: TextStyle(fontSize: 12.5, fontFamily: AppFont.fontFamily, color: AppColor.greyColor),
+            ),
+          )
+        else
+          ...missions.map((m) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: MissionCard(
+                  mission: m,
+                  claiming: claimingId == m['_id']?.toString(),
+                  onClaim: () => onClaim(m),
+                ),
+              )),
+      ],
+    );
+  }
+}
+
+// ── Generic Navigation Button ─────────────────────────────────────────────────
+
+class _NavButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final VoidCallback onTap;
+  const _NavButton({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFECEFF3)),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(0, 2))],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(color: AppColor.themeColor.withOpacity(0.1), shape: BoxShape.circle),
+              child: Icon(icon, color: AppColor.themeColor, size: 18),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, fontFamily: AppFont.fontFamily, color: AppColor.blackColor)),
+                  const SizedBox(height: 2),
+                  Text(subtitle, style: const TextStyle(fontSize: 11.5, fontFamily: AppFont.fontFamily, color: AppColor.greyColor)),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: AppColor.themeColor),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Redeem Requests Screen (full history) ─────────────────────────────────────
+
+class _RedeemRequestsScreen extends StatelessWidget {
+  final Future<List<Map<String, dynamic>>>? future;
+  const _RedeemRequestsScreen({required this.future});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 16, 8),
+              child: Row(
+                children: [
+                  InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: () => Navigator.pop(context),
+                    child: const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Icon(Icons.arrow_back_rounded, color: Color(0xFF0F172A), size: 22),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Expanded(
+                    child: Text(
+                      'Cash Redemption Requests',
+                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF0F172A), fontFamily: AppFont.fontFamily),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: FutureBuilder<List<Map<String, dynamic>>>(
+                future: future,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator(color: AppColor.themeColor));
+                  }
+                  final requests = snapshot.data ?? [];
+                  if (requests.isEmpty) {
+                    return Center(
+                      child: Text('No redemption requests yet', style: TextStyle(fontFamily: AppFont.fontFamily, fontSize: 15, color: AppColor.greyColor)),
+                    );
+                  }
+                  return SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 40),
+                    child: _RedeemRequestsSection(requests: requests),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Transaction History Screen (full history) ──────────────────────────────────
+
+class _TransactionHistoryScreen extends StatelessWidget {
+  final Future<List<Map<String, dynamic>>>? future;
+  const _TransactionHistoryScreen({required this.future});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 16, 8),
+              child: Row(
+                children: [
+                  InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: () => Navigator.pop(context),
+                    child: const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Icon(Icons.arrow_back_rounded, color: Color(0xFF0F172A), size: 22),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Expanded(
+                    child: Text(
+                      'Transaction History',
+                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF0F172A), fontFamily: AppFont.fontFamily),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: FutureBuilder<List<Map<String, dynamic>>>(
+                future: future,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: _HistoryShimmer(),
+                    );
+                  }
+                  return SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 40),
+                    child: _TransactionHistory(transactions: snapshot.data ?? []),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -215,35 +566,39 @@ class _CoinWalletScreenState extends State<CoinWalletScreen> {
 
 class _HeroBalanceCard extends StatelessWidget {
   final Map<String, dynamic>? data;
-  const _HeroBalanceCard({required this.data});
+  // Passed in from the full, unfiltered transaction history (see _body()) —
+  // NOT computed from data['transactions'], which is the balance API's list
+  // of currently non-expired coins only and would understate the true
+  // lifetime total as coins expire after 30 days.
+  final int lifetimeEarning;
+  final int minRedeemCoins;
+  final VoidCallback onRedeemTap;
+  const _HeroBalanceCard({
+    required this.data,
+    required this.lifetimeEarning,
+    required this.minRedeemCoins,
+    required this.onRedeemTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final int balance = (data?['coin_balance'] ?? 0) as int;
-    final transactions = List<Map<String, dynamic>>.from(
-      data?['transactions'] ?? [],
-    );
-    final int totalEarned = transactions
-        .where((t) => t['type'] != 'redeemed')
-        .fold<int>(0, (s, t) => s + ((t['coins'] ?? 0) as num).toInt());
-    final int totalRedeemed = transactions
-        .where((t) => t['type'] == 'redeemed')
-        .fold<int>(0, (s, t) => s + ((t['coins'] ?? 0) as num).abs().toInt());
+    final bool redeemEligible = balance >= minRedeemCoins;
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF1A3A6B), Color(0xFF091932)],
+          colors: [Color(0xff0A3D91), Color(0xff1565C0)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF091932).withOpacity(0.35),
-            blurRadius: 20,
+            color: const Color(0xff0A3D91).withOpacity(0.30),
+            blurRadius: 16,
             offset: const Offset(0, 8),
           ),
         ],
@@ -253,7 +608,11 @@ class _HeroBalanceCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Text('🪙', style: TextStyle(fontSize: 36)),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), shape: BoxShape.circle),
+                child: const Icon(Icons.monetization_on_rounded, color: Colors.white, size: 26),
+              ),
               const SizedBox(width: 14),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -280,12 +639,57 @@ class _HeroBalanceCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 20),
-          Row(
+          // Lifetime Earning stat and the Redeem action sit side by side as
+          // two equal-width, equal-height blocks. IntrinsicHeight (not
+          // CrossAxisAlignment.stretch) equalizes their height — stretch
+          // tries to stretch children to the Row's own height, which is
+          // unbounded here (this Column lives inside a SingleChildScrollView),
+          // and that throws "BoxConstraints forces an infinite height".
+          IntrinsicHeight(
+            child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _StatChip(label: 'Total Earned', value: '$totalEarned', icon: Icons.add_circle_outline_rounded),
+              Expanded(
+                child: _StatChip(label: 'Lifetime Earning', value: '$lifetimeEarning', icon: Icons.trending_up_rounded),
+              ),
               const SizedBox(width: 12),
-              _StatChip(label: 'Redeemed', value: '$totalRedeemed', icon: Icons.local_offer_outlined),
+              Expanded(
+                child: InkWell(
+                  onTap: onRedeemTap,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.account_balance_wallet_rounded, color: Colors.white, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Redeem',
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15, fontFamily: AppFont.fontFamily),
+                              ),
+                              Text(
+                                redeemEligible ? 'Get Cash' : 'Need $minRedeemCoins',
+                                style: const TextStyle(color: Colors.white54, fontSize: 10.5, fontFamily: AppFont.fontFamily),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.arrow_forward_ios_rounded, size: 12, color: Colors.white70),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ],
+          ),
           ),
         ],
       ),
@@ -301,26 +705,27 @@ class _StatChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.white70, size: 16),
-            const SizedBox(width: 8),
-            Column(
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: Colors.white70, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15, fontFamily: AppFont.fontFamily)),
-                Text(label, style: const TextStyle(color: Colors.white54, fontSize: 10.5, fontFamily: AppFont.fontFamily)),
+                Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15, fontFamily: AppFont.fontFamily), maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(label, style: const TextStyle(color: Colors.white54, fontSize: 10.5, fontFamily: AppFont.fontFamily), maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -344,14 +749,19 @@ class _MilestoneProgressCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 3))],
+        border: Border.all(color: const Color(0xFFECEFF3)),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Text('🎯', style: TextStyle(fontSize: 18)),
+              Container(
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(color: AppColor.themeColor.withOpacity(0.1), shape: BoxShape.circle),
+                child: const Icon(Icons.flag_rounded, size: 15, color: AppColor.themeColor),
+              ),
               const SizedBox(width: 8),
               const Text('Weekly Milestone', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, fontFamily: AppFont.fontFamily, color: AppColor.blackColor)),
               const Spacer(),
@@ -387,7 +797,7 @@ class _MilestoneProgressCard extends StatelessWidget {
           const SizedBox(height: 10),
           Text(
             reached
-                ? '✅ $target/$target orders completed this week — Bonus Credited!'
+                ? '$target/$target orders completed this week — Bonus Credited!'
                 : '$weeklyCount/$target orders this week · ${target - weeklyCount} more for bonus coins',
             style: TextStyle(
               fontSize: 12.5,
@@ -408,7 +818,7 @@ class _HowToUseCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const rules = [
-      (Icons.account_balance_wallet_outlined, 'Redeem 50+ coins for cash to your bank account or UPI ID'),
+      (Icons.account_balance_wallet_outlined, 'Redeem 50+ coins for cash to your UPI ID'),
       (Icons.currency_rupee_rounded, '1 Coin = ₹1 cash payout'),
       (Icons.schedule_rounded, 'Coins expire in 30 days from earning'),
     ];
@@ -417,7 +827,8 @@ class _HowToUseCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 3))],
+        border: Border.all(color: const Color(0xFFECEFF3)),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -461,7 +872,7 @@ class _TransactionHistory extends StatelessWidget {
         alignment: Alignment.center,
         child: const Column(
           children: [
-            Text('🪙', style: TextStyle(fontSize: 40)),
+            Icon(Icons.monetization_on_outlined, size: 40, color: Color(0xFFCBD5E1)),
             SizedBox(height: 12),
             Text('No transactions yet', style: TextStyle(fontFamily: AppFont.fontFamily, fontSize: 15, color: AppColor.greyColor)),
             SizedBox(height: 4),
@@ -498,7 +909,8 @@ class _TransactionHistory extends StatelessWidget {
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(14),
-                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(0, 2))],
+                border: Border.all(color: const Color(0xFFECEFF3)),
+                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(0, 2))],
               ),
               child: Column(
                 children: e.value.map((t) => _TransactionRow(txn: t)).toList(),
@@ -522,6 +934,8 @@ String _coinTypeLabel(String type) {
       return 'Welcome bonus';
     case 'milestone_bonus':
       return 'Milestone bonus';
+    case 'mission_reward':
+      return 'Mission reward';
     case 'redeemed':
       return 'Redeemed';
     default:
@@ -624,7 +1038,7 @@ class _TransactionRow extends StatelessWidget {
             ),
           ),
           Text(
-            isRedeemed ? '-$coins 🪙' : '+$coins 🪙',
+            isRedeemed ? '-$coins' : '+$coins',
             style: TextStyle(
               fontWeight: FontWeight.w700,
               fontFamily: AppFont.fontFamily,
@@ -681,7 +1095,7 @@ class _RedeemForCashButton extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     eligible
-                        ? 'Get paid to your bank account or UPI ID'
+                        ? 'Get paid to your UPI ID'
                         : 'Earn at least $minCoins coins to redeem (you have $coinBalance)',
                     style: TextStyle(fontSize: 11.5, fontFamily: AppFont.fontFamily, color: AppColor.greyColor),
                   ),
@@ -724,7 +1138,8 @@ class _RedeemRequestsSection extends StatelessWidget {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(14),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(0, 2))],
+            border: Border.all(color: const Color(0xFFECEFF3)),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(0, 2))],
           ),
           child: Column(
             children: requests.map((r) {
@@ -792,12 +1207,9 @@ class _RedeemForCashSheet extends StatefulWidget {
 
 class _RedeemForCashSheetState extends State<_RedeemForCashSheet> {
   static const int minCoins = 50;
-  String _method = 'bank';
+  static const String _method = 'upi';
   bool _submitting = false;
   late final TextEditingController _coinsCtrl;
-  final _accountCtrl = TextEditingController();
-  final _ifscCtrl = TextEditingController();
-  final _holderCtrl = TextEditingController();
   final _upiCtrl = TextEditingController();
 
   @override
@@ -809,9 +1221,6 @@ class _RedeemForCashSheetState extends State<_RedeemForCashSheet> {
   @override
   void dispose() {
     _coinsCtrl.dispose();
-    _accountCtrl.dispose();
-    _ifscCtrl.dispose();
-    _holderCtrl.dispose();
     _upiCtrl.dispose();
     super.dispose();
   }
@@ -826,11 +1235,7 @@ class _RedeemForCashSheetState extends State<_RedeemForCashSheet> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('You don\'t have enough coins')));
       return;
     }
-    if (_method == 'bank' && (_accountCtrl.text.trim().isEmpty || _ifscCtrl.text.trim().isEmpty || _holderCtrl.text.trim().isEmpty)) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please fill all bank details')));
-      return;
-    }
-    if (_method == 'upi' && _upiCtrl.text.trim().isEmpty) {
+    if (_upiCtrl.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter your UPI ID')));
       return;
     }
@@ -841,9 +1246,9 @@ class _RedeemForCashSheetState extends State<_RedeemForCashSheet> {
       context,
       coins: coins,
       payoutMethod: _method,
-      bankAccountNumber: _accountCtrl.text.trim(),
-      bankIfsc: _ifscCtrl.text.trim(),
-      bankAccountHolder: _holderCtrl.text.trim(),
+      bankAccountNumber: '',
+      bankIfsc: '',
+      bankAccountHolder: '',
       upiId: _upiCtrl.text.trim(),
     );
     if (!mounted) return;
@@ -897,39 +1302,7 @@ class _RedeemForCashSheetState extends State<_RedeemForCashSheet> {
                 ),
               ),
               const SizedBox(height: 18),
-              Text('Payout method', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, fontFamily: AppFont.fontFamily, color: AppColor.blackColor)),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: _MethodChip(
-                      label: 'Bank Transfer',
-                      icon: Icons.account_balance_rounded,
-                      selected: _method == 'bank',
-                      onTap: () => setState(() => _method = 'bank'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _MethodChip(
-                      label: 'UPI',
-                      icon: Icons.qr_code_rounded,
-                      selected: _method == 'upi',
-                      onTap: () => setState(() => _method = 'upi'),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              if (_method == 'bank') ...[
-                _LabeledField(label: 'Account Holder Name', controller: _holderCtrl),
-                const SizedBox(height: 12),
-                _LabeledField(label: 'Account Number', controller: _accountCtrl, keyboardType: TextInputType.number),
-                const SizedBox(height: 12),
-                _LabeledField(label: 'IFSC Code', controller: _ifscCtrl, textCapitalization: TextCapitalization.characters),
-              ] else ...[
-                _LabeledField(label: 'UPI ID', controller: _upiCtrl, hint: 'yourname@upi'),
-              ],
+              _LabeledField(label: 'UPI ID', controller: _upiCtrl, hint: 'yourname@upi'),
               const SizedBox(height: 22),
               SizedBox(
                 width: double.infinity,
@@ -952,37 +1325,6 @@ class _RedeemForCashSheetState extends State<_RedeemForCashSheet> {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MethodChip extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-  const _MethodChip({required this.label, required this.icon, required this.selected, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: selected ? AppColor.themeColor.withOpacity(0.1) : Colors.white,
-          border: Border.all(color: selected ? AppColor.themeColor : const Color(0xffDEE2E6), width: selected ? 1.5 : 1),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, size: 20, color: selected ? AppColor.themeColor : AppColor.greyColor),
-            const SizedBox(height: 4),
-            Text(label, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, fontFamily: AppFont.fontFamily, color: selected ? AppColor.themeColor : AppColor.blackColor)),
-          ],
         ),
       ),
     );
@@ -1043,18 +1385,23 @@ class _PendingScratchCardsSection extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 3))],
+        border: Border.all(color: const Color(0xFFECEFF3)),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Text('🎁', style: TextStyle(fontSize: 18)),
+              Container(
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(color: Colors.amber.withOpacity(0.15), shape: BoxShape.circle),
+                child: const Icon(Icons.card_giftcard_rounded, size: 15, color: Color(0xFFB8860B)),
+              ),
               const SizedBox(width: 8),
               const Expanded(
                 child: Text(
-                  'Scratch Cards',
+                  'Delivery Rewards',
                   style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, fontFamily: AppFont.fontFamily, color: AppColor.blackColor),
                 ),
               ),
@@ -1073,7 +1420,7 @@ class _PendingScratchCardsSection extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Tap a card to scratch and reveal your coins',
+            'Coins are added to your wallet automatically after each delivery — tap to view',
             style: TextStyle(fontSize: 12, color: AppColor.greyColor, fontFamily: AppFont.fontFamily),
           ),
           const SizedBox(height: 14),
@@ -1128,12 +1475,20 @@ class _ScratchCardTileState extends State<_ScratchCardTile> {
   Future<void> _onTap() async {
     if (_tapped) return;
     setState(() => _tapped = true);
-    await CoinScratchCardScreen.showIfNeeded(
+    final claimed = await CoinScratchCardScreen.showIfNeeded(
       context,
       bookingId: widget.bookingId,
       coins: widget.coins,
     );
-    if (mounted) widget.onScratched();
+    if (!mounted) return;
+    if (claimed) {
+      widget.onScratched();
+    } else {
+      // User backed out before scratching/claiming — nothing was earned,
+      // so put the tile back to its untapped state instead of leaving it
+      // stuck on "Opening..." and silently dropping the card.
+      setState(() => _tapped = false);
+    }
   }
 
   @override
@@ -1164,7 +1519,7 @@ class _ScratchCardTileState extends State<_ScratchCardTile> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('🪙', style: TextStyle(fontSize: 22)),
+                    Icon(Icons.monetization_on_rounded, color: Color(0xFF0D2137), size: 22),
                     SizedBox(height: 2),
                     Text('Opening...', style: TextStyle(color: Color(0xFF0D2137), fontSize: 10, fontFamily: AppFont.fontFamily, fontWeight: FontWeight.w600)),
                   ],
@@ -1176,7 +1531,7 @@ class _ScratchCardTileState extends State<_ScratchCardTile> {
                   const Icon(Icons.touch_app_rounded, color: Colors.white70, size: 26),
                   const SizedBox(height: 4),
                   const Text(
-                    'Tap to Scratch',
+                    'Tap to View',
                     style: TextStyle(color: Colors.white70, fontSize: 10, fontFamily: AppFont.fontFamily),
                   ),
                   if (widget.bookingCode.isNotEmpty)
@@ -1220,20 +1575,17 @@ class _CoinsIntroSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final maxHeight = MediaQuery.of(context).size.height * 0.85;
     return Container(
+      constraints: BoxConstraints(maxHeight: maxHeight),
       decoration: const BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      // isScrollControlled lets this sheet grow to fit its content instead of
-      // being capped at a fixed fraction of the screen height, and wrapping
-      // in SingleChildScrollView means that if it's ever still taller than
-      // the screen (e.g. large accessibility text), it scrolls instead of
-      // overflowing off the bottom edge.
+      padding: EdgeInsets.fromLTRB(
+        24, 12, 24, 24 + MediaQuery.of(context).padding.bottom,
+      ),
       child: SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(
-          24, 12, 24, 32 + MediaQuery.of(context).padding.bottom,
-        ),
         child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1246,7 +1598,7 @@ class _CoinsIntroSheet extends StatelessWidget {
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [Color(0xFF1A3A6B), Color(0xFF091932)],
+                colors: [Color(0xff0A3D91), Color(0xff1565C0)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -1254,8 +1606,12 @@ class _CoinsIntroSheet extends StatelessWidget {
             ),
             child: Column(
               children: [
-                const Text('🪙', style: TextStyle(fontSize: 48)),
-                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), shape: BoxShape.circle),
+                  child: const Icon(Icons.monetization_on_rounded, color: Colors.white, size: 34),
+                ),
+                const SizedBox(height: 10),
                 const Text(
                   'Movigo Coins',
                   style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900, fontFamily: AppFont.fontFamily),
@@ -1274,7 +1630,7 @@ class _CoinsIntroSheet extends StatelessWidget {
           const SizedBox(height: 12),
           _InfoRow(icon: Icons.star_rounded, color: Colors.amber, text: 'Bonus coins every week on 10+ orders (up to 50 bonus coins)'),
           const SizedBox(height: 12),
-          _InfoRow(icon: Icons.account_balance_wallet_rounded, color: AppColor.themeColor, text: 'Redeem 50+ coins for cash to your bank account or UPI ID'),
+          _InfoRow(icon: Icons.account_balance_wallet_rounded, color: AppColor.themeColor, text: 'Redeem 50+ coins for cash to your UPI ID'),
           const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.all(12),

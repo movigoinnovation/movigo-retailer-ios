@@ -426,6 +426,24 @@ class _MapImageState extends State<MapImageScreen> {
                     circles: _circles,
                     onMapCreated: (GoogleMapController controller) {
                       mapController = controller;
+                      controller.setMapStyle('''
+                        [
+                          {
+                            "featureType": "poi",
+                            "elementType": "all",
+                            "stylers": [
+                              { "visibility": "off" }
+                            ]
+                          },
+                          {
+                            "featureType": "transit",
+                            "elementType": "all",
+                            "stylers": [
+                              { "visibility": "off" }
+                            ]
+                          }
+                        ]
+                      ''');
                       if (!_controller.isCompleted) {
                         _controller.complete(controller);
                       }
@@ -616,6 +634,24 @@ class _MapImageState extends State<MapImageScreen> {
                                   circles: _circles,
                                   onMapCreated: (GoogleMapController controller) {
                                     mapController = controller;
+                                    controller.setMapStyle('''
+                                      [
+                                        {
+                                          "featureType": "poi",
+                                          "elementType": "all",
+                                          "stylers": [
+                                            { "visibility": "off" }
+                                          ]
+                                        },
+                                        {
+                                          "featureType": "transit",
+                                          "elementType": "all",
+                                          "stylers": [
+                                            { "visibility": "off" }
+                                          ]
+                                        }
+                                      ]
+                                    ''');
                                     if (!_controller.isCompleted) {
                                       _controller.complete(controller);
                                     }
@@ -1359,7 +1395,7 @@ class _MapImageState extends State<MapImageScreen> {
     if (vehicleName.contains("2 wheeler") ||
         vehicleName.contains("bike") ||
         vehicleName.contains("scooter")) {
-      return AppImage.twowheel;
+      return AppImage.topViewBike;
     }
     if (vehicleName.contains("mini")) {
       return AppImage.minitruck;

@@ -1,8 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
-import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,25 +14,25 @@ import 'package:movigo/utilities/app_color.dart';
 import 'package:movigo/utilities/app_constant.dart';
 import 'package:movigo/utilities/app_font.dart';
 import 'package:movigo/utilities/app_footer.dart';
-import 'package:movigo/utilities/app_language.dart';
-import 'package:movigo/utilities/app_image.dart';
 import 'booking_detail_screen.dart';
-import 'package:movigo/view/retailer_screen/retailer_booking_screen/accept_booking_detail_screen.dart';
 
 class FindingDriverScreen extends StatefulWidget {
   final String bookingId;
-  final double pickupLat;
-  final double pickupLng;
+  // Null when the caller doesn't have the booking's pickup point handy (e.g.
+  // resuming a killed app or reassigning a driver) — the screen fetches the
+  // real coordinates via bookingId in that case instead of guessing.
+  final double? pickupLat;
+  final double? pickupLng;
   final String pickupAddress;
   final String dropAddress;
   final int wheelCount;
   final bool isReassigning;
 
   const FindingDriverScreen({
-    super.key, 
+    super.key,
     this.bookingId = '',
-    this.pickupLat = 22.7196,
-    this.pickupLng = 75.8577,
+    this.pickupLat,
+    this.pickupLng,
     this.pickupAddress = 'Fetching current address...',
     this.dropAddress = 'Fetching destination address...',
     this.wheelCount = 2,
@@ -49,79 +46,42 @@ class FindingDriverScreen extends StatefulWidget {
 class _FindingDriverScreenState extends State<FindingDriverScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
   bool _dialogShown = false;
   Timer? _pollTimer;
+  // Real wall-clock deadline for auto-cancel — deliberately NOT driven by
+  // _progressController. AnimationController durations are scaled by the
+  // device's "Animator duration scale" developer setting (and some OEM
+  // battery-saver modes), so a device with that set to e.g. 0.5x would
+  // complete a 600s AnimationController in ~300s and cancel the booking
+  // early even though only half the real wait time had passed. A plain
+  // Timer runs on real elapsed time regardless of that setting.
+  Timer? _autoCancelTimer;
   final CheckBookingStatusController _statusController = CheckBookingStatusController();
 
   // Map & Animation
   GoogleMapController? _mapController;
   late LatLng _pickupLocation;
+  // True until a real pickup point is known — either passed in directly or
+  // backfilled from the booking once fetched by bookingId.
+  bool _awaitingRealPickup = false;
   late AnimationController _radarController;
-  late AnimationController _progressController;
   Set<Marker> _markers = {};
-  Set<Circle> _circles = {};
-  Timer? _markerMovementTimer;
-  List<LatLng> _dummyDriverLocations = [];
 
-  // Zomato style text
-  final List<String> _dynamicTexts = [
-    "Looking for the 'One'... (driver, not soulmate) 🫣",
-    "Matchmaking you with the perfect captain...",
-    "Bribing the traffic lights for a green route 🚦",
-    "Waking up nearby captains (we gave them coffee) ☕",
-    "Looking for a captain who treats your goods like royalty 👑",
-    "Sending a bat-signal to our best drivers 🦇",
-    "Manifesting a ride for you right now ✨"
-  ];
-  int _currentTextIndex = 0;
-  Timer? _textTimer;
+  // Real elapsed time since the search started — drives the progress bar,
+  // the "Searching for M:SS" label, and the staged messages below, all off
+  // the SAME clock as the real 600s auto-cancel deadline, so nothing on
+  // screen can ever say something that isn't actually true.
+  static const int _autoCancelSeconds = 600;
+  Timer? _elapsedTimer;
+  int _elapsedSeconds = 0;
 
-  BitmapDescriptor? _driverMarkerIcon;
-
-  Future<void> _loadCustomMarkerIcon() async {
-    try {
-      String assetPath = AppImage.twowheel;
-      if (widget.wheelCount == 3) {
-        assetPath = AppImage.eloader;
-      } else if (widget.wheelCount == 4) {
-        assetPath = AppImage.minitruck;
-      }
-      
-      final normalizedPath = assetPath.startsWith('./') ? assetPath.substring(2) : assetPath;
-      final ByteData byteData = await rootBundle.load(normalizedPath);
-      final Uint8List bytes = byteData.buffer.asUint8List();
-
-      final codec = await ui.instantiateImageCodec(
-        bytes,
-        targetWidth: 80,
-        targetHeight: 80,
-      );
-      final frame = await codec.getNextFrame();
-      final image = frame.image;
-
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder);
-      final paint = Paint()..isAntiAlias = true;
-
-      canvas.drawImageRect(
-        image,
-        Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
-        const Rect.fromLTWH(0, 0, 80, 80),
-        paint,
-      );
-
-      final picture = recorder.endRecording();
-      final img = await picture.toImage(80, 80);
-      final outByteData = await img.toByteData(format: ui.ImageByteFormat.png);
-      final Uint8List resizedBytes = outByteData!.buffer.asUint8List();
-
-      if (mounted) {
-        setState(() {
-          _driverMarkerIcon = BitmapDescriptor.fromBytes(resizedBytes);
-          _updateMarkers();
-        });
-      }
-    } catch (e) {
-      debugPrint("Error loading custom marker: $e");
-    }
+  // Honest, stage-based messaging tied to what's actually happening server-
+  // side (see Backend/src/utils/dispatchRadius.js tier1_duration_seconds and
+  // bookingTimeout.js's 10-minute cutoff) instead of a joke-text carousel
+  // that says the same thing whether it's been 5 seconds or 5 minutes.
+  String _stageMessage() {
+    if (_elapsedSeconds < 30) return "Notifying nearby captains...";
+    if (_elapsedSeconds < 300) return "Expanding search radius to find you a captain...";
+    if (_elapsedSeconds < 480) return "Still searching — hang tight, almost there...";
+    return "Taking longer than usual — you can keep waiting or cancel below.";
   }
 
   @override
@@ -136,27 +96,24 @@ class _FindingDriverScreenState extends State<FindingDriverScreen> with TickerPr
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _pickupLocation = LatLng(widget.pickupLat, widget.pickupLng);
-    _loadCustomMarkerIcon();
-
+    if (widget.pickupLat != null && widget.pickupLng != null) {
+      _pickupLocation = LatLng(widget.pickupLat!, widget.pickupLng!);
+    } else {
+      _awaitingRealPickup = true;
+      _pickupLocation = const LatLng(22.7196, 75.8577); // temporary map center until the real fetch resolves
+    }
     _radarController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat();
 
-    _progressController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 600),
-    )
-      ..addStatusListener((status) {
-        if (status == AnimationStatus.completed) _onTimerExpired();
-      })
-      ..forward();
+    _autoCancelTimer = Timer(Duration(seconds: _autoCancelSeconds), _onTimerExpired);
+    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _elapsedSeconds++);
+    });
 
-    _dynamicTexts.shuffle();
-    _startDynamicTextAndProgress();
-
-    _initDummyDrivers();
+    _updateMarkers();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final socketProvider = Provider.of<SocketProvider>(context, listen: false);
@@ -185,63 +142,20 @@ class _FindingDriverScreenState extends State<FindingDriverScreen> with TickerPr
     });
   }
 
-  void _initDummyDrivers() {
-    final random = Random();
-    for (int i = 0; i < 5; i++) {
-      // 3 km radius is approx 0.027 degrees offset, so we spread them within 3 km
-      double latOffset = (random.nextDouble() - 0.5) * 0.035;
-      double lngOffset = (random.nextDouble() - 0.5) * 0.035;
-      _dummyDriverLocations.add(LatLng(_pickupLocation.latitude + latOffset, _pickupLocation.longitude + lngOffset));
-    }
-    _updateMarkers();
-
-    _markerMovementTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (!mounted) return;
-      for (int i = 0; i < _dummyDriverLocations.length; i++) {
-        double latOffset = (random.nextDouble() - 0.5) * 0.003;
-        double lngOffset = (random.nextDouble() - 0.5) * 0.003;
-        _dummyDriverLocations[i] = LatLng(
-          _dummyDriverLocations[i].latitude + latOffset,
-          _dummyDriverLocations[i].longitude + lngOffset,
-        );
-      }
-      _updateMarkers();
-    });
-  }
-
-  void _updateMarkers() async {
-    final Map<MarkerId, Marker> newMarkers = {};
-    
-    // Add pickup marker
-    newMarkers[const MarkerId('pickup')] = Marker(
-      markerId: const MarkerId('pickup'),
-      position: _pickupLocation,
-      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-    );
-
-    // Add dummy drivers
-    for (int i = 0; i < _dummyDriverLocations.length; i++) {
-      newMarkers[MarkerId('driver_$i')] = Marker(
-        markerId: MarkerId('driver_$i'),
-        position: _dummyDriverLocations[i],
-        icon: _driverMarkerIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
-        rotation: Random().nextDouble() * 360,
-      );
-    }
-
-    if (mounted) {
-      setState(() {
-        _markers = newMarkers.values.toSet();
-      });
-    }
-  }
-
-  void _startDynamicTextAndProgress() {
-    _textTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (!mounted) return;
-      setState(() {
-        _currentTextIndex = (_currentTextIndex + 1) % _dynamicTexts.length;
-      });
+  // Real pickup marker only — the old build also drew 5 randomly-jiggling
+  // "driver" markers around it, which weren't real drivers at all and made
+  // it look like captains were nearby/moving when nothing was actually
+  // happening yet. Removed rather than replaced with anything fake.
+  void _updateMarkers() {
+    if (!mounted) return;
+    setState(() {
+      _markers = {
+        Marker(
+          markerId: const MarkerId('pickup'),
+          position: _pickupLocation,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+        ),
+      };
     });
   }
 
@@ -254,13 +168,27 @@ class _FindingDriverScreenState extends State<FindingDriverScreen> with TickerPr
       return;
     }
     if (!mounted || _dialogShown) return;
+
+    if (_awaitingRealPickup) {
+      final loc = _statusController.pickupLocation;
+      final lat = (loc?['latitude'] as num?)?.toDouble();
+      final lng = (loc?['longitude'] as num?)?.toDouble();
+      if (lat != null && lng != null && (lat != 0 || lng != 0)) {
+        _awaitingRealPickup = false;
+        setState(() => _pickupLocation = LatLng(lat, lng));
+        _updateMarkers();
+        _mapController?.animateCamera(CameraUpdate.newLatLng(_pickupLocation));
+      }
+    }
+
     final status = (_statusController.bookingStatus ?? '').trim();
     final accepted = _statusController.isDriverAccepted == true ||
         ['Accepted', 'Arrived', 'ArrivedAtPickup', 'Pickup', 'PickedUp', 'Ongoing', 'OnTheWay']
             .contains(status);
     if (accepted) {
       _pollTimer?.cancel();
-      _progressController.stop();
+      _autoCancelTimer?.cancel();
+      _elapsedTimer?.cancel();
       _dialogShown = true;
       debugPrint('[FindingDriverScreen] Poll detected accepted status=$status — navigating');
       WidgetsBinding.instance.addPostFrameCallback((_) => _showDriverConfirmedDialog());
@@ -268,7 +196,8 @@ class _FindingDriverScreenState extends State<FindingDriverScreen> with TickerPr
     }
     if (_statusController.isTerminalStatus) {
       _pollTimer?.cancel();
-      _progressController.stop();
+      _autoCancelTimer?.cancel();
+      _elapsedTimer?.cancel();
       _dialogShown = true;
       debugPrint('[FindingDriverScreen] Poll detected terminal status=$status — showing dialog');
       WidgetsBinding.instance.addPostFrameCallback((_) => _showNoDriverDialog());
@@ -279,10 +208,9 @@ class _FindingDriverScreenState extends State<FindingDriverScreen> with TickerPr
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
-    _markerMovementTimer?.cancel();
-    _textTimer?.cancel();
+    _autoCancelTimer?.cancel();
+    _elapsedTimer?.cancel();
     _radarController.dispose();
-    _progressController.dispose();
     try {
       Provider.of<SocketProvider>(context, listen: false).removeListener(_onSocketUpdate);
     } catch (_) {}
@@ -293,7 +221,8 @@ class _FindingDriverScreenState extends State<FindingDriverScreen> with TickerPr
     final socket = Provider.of<SocketProvider>(context, listen: false);
     if (socket.isDriverAccepted == true && !_dialogShown) {
       _pollTimer?.cancel();
-      _progressController.stop();
+      _autoCancelTimer?.cancel();
+      _elapsedTimer?.cancel();
       _dialogShown = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _showDriverConfirmedDialog();
@@ -429,7 +358,7 @@ class _FindingDriverScreenState extends State<FindingDriverScreen> with TickerPr
 
   void _showDriverConfirmedDialog() {
     // Navigate immediately to the retailer live tracking screen — no dialog tap required
-    debugPrint('[FindingDriverScreen] Driver accepted — navigating to RAcceptBookingDetailScreen');
+    debugPrint('[FindingDriverScreen] Driver accepted — navigating to BookingDetailScreen');
     if (!mounted) return;
     // Booking is now active with a driver — clear the "finding" restore point;
     // the detail screen manages its own state from here.
@@ -622,29 +551,29 @@ class _FindingDriverScreenState extends State<FindingDriverScreen> with TickerPr
                   ),
                   const SizedBox(height: 8),
                   
-                  // Dynamic Zomato text
+                  // Honest, stage-based status text — tied to real elapsed
+                  // time, not a joke-text carousel that means nothing.
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 500),
                     child: Text(
-                      _dynamicTexts[_currentTextIndex],
-                      key: ValueKey<int>(_currentTextIndex),
+                      _stageMessage(),
+                      key: ValueKey<String>(_stageMessage()),
                       style: const TextStyle(fontSize: 14, color: Colors.grey, fontWeight: FontWeight.w500),
                     ),
                   ),
                   const SizedBox(height: 20),
 
-                  // Rapido Style Progress Bar
+                  // Progress bar driven by the SAME real elapsed-time clock as
+                  // the 600s auto-cancel deadline — always truthful, never
+                  // decoupled from what's actually about to happen.
                   ClipRRect(
                     borderRadius: BorderRadius.circular(8),
                     child: SizedBox(
                       height: 8,
-                      child: AnimatedBuilder(
-                        animation: _progressController,
-                        builder: (_, __) => LinearProgressIndicator(
-                          value: _progressController.value,
-                          backgroundColor: Colors.grey.shade200,
-                          valueColor: const AlwaysStoppedAnimation<Color>(AppColor.primaryColor),
-                        ),
+                      child: LinearProgressIndicator(
+                        value: (_elapsedSeconds / _autoCancelSeconds).clamp(0.0, 1.0),
+                        backgroundColor: Colors.grey.shade200,
+                        valueColor: const AlwaysStoppedAnimation<Color>(AppColor.primaryColor),
                       ),
                     ),
                   ),
@@ -686,14 +615,40 @@ class _FindingDriverScreenState extends State<FindingDriverScreen> with TickerPr
                   const Divider(color: Colors.black12),
                   const SizedBox(height: 8),
                   
-                  // Estimated Time
+                  // Live elapsed time — replaces a static "4-6 mins" promise
+                  // that was never actually computed from anything.
                   Row(
-                    children: const [
-                      Icon(Icons.access_time, size: 20, color: AppColor.primaryColor),
-                      SizedBox(width: 8),
-                      Text("Estimated Arrival: 4-6 mins", style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColor.primaryColor)),
+                    children: [
+                      const Icon(Icons.access_time, size: 20, color: AppColor.primaryColor),
+                      const SizedBox(width: 8),
+                      Text(
+                        "Searching for ${(_elapsedSeconds ~/ 60).toString().padLeft(1, '0')}:${(_elapsedSeconds % 60).toString().padLeft(2, '0')}",
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColor.primaryColor),
+                      ),
                     ],
-                  )
+                  ),
+                  // A gentler, earlier off-ramp than the top-right menu —
+                  // surfaced only once the wait is genuinely getting long,
+                  // instead of making the retailer sit through the whole
+                  // 10-minute deadline before finding a way to act.
+                  if (_elapsedSeconds >= 120 && !widget.isReassigning) ...[
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        onPressed: _showCancelDialog,
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: const Text(
+                          "Taking too long? Cancel or edit your ride",
+                          style: TextStyle(fontSize: 12.5, color: Colors.redAccent, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

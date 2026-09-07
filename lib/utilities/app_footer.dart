@@ -33,7 +33,10 @@ class _CustomBottomNavState extends State<CustomBottomNav> {
   late final List<Widget> pages;
   String userType = "";
   StreamSubscription? _milestoneSubscription;
-  int _coinTabKey = 0;
+  // Built lazily on first visit, then kept alive (never removed from the
+  // tree) so switching tabs doesn't dispose/recreate it — that was causing
+  // a full reload + blink on every single tap of the Coins tab.
+  Widget? _coinTab;
 
   bool get _isRetailer => widget.userType == UserType.retailer;
 
@@ -41,6 +44,7 @@ class _CustomBottomNavState extends State<CustomBottomNav> {
   void initState() {
     super.initState();
     selectedIndex = widget.initialIndex;
+    if (selectedIndex == 2) _coinTab = const CoinTabScreen();
     final userController = Provider.of<UserController>(context, listen: false);
 
     setState(() {
@@ -141,8 +145,11 @@ class _CustomBottomNavState extends State<CustomBottomNav> {
               children: pages,
             ),
           ),
-          if (selectedIndex == 2)
-            CoinTabScreen(key: ValueKey(_coinTabKey)),
+          if (_coinTab != null)
+            Offstage(
+              offstage: selectedIndex != 2,
+              child: _coinTab!,
+            ),
         ],
       ),
       bottomNavigationBar: Builder(
@@ -176,7 +183,7 @@ class _CustomBottomNavState extends State<CustomBottomNav> {
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () => setState(() {
-                        if (index == 2) _coinTabKey++;
+                        if (index == 2) _coinTab ??= const CoinTabScreen();
                         selectedIndex = index;
                       }),
                       child: Column(

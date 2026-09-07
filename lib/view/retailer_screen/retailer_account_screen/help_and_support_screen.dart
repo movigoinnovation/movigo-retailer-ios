@@ -20,7 +20,12 @@ import 'package:movigo/utilities/app_snackbar_toast_message.dart';
 import 'package:movigo/utilities/common_text_field.dart';
 
 class RHelpAndSupportscreen extends StatefulWidget {
-  const RHelpAndSupportscreen({super.key});
+  // Booking-tracking screens (accept/arrived/pickup) only want the helpline
+  // numbers to call — not the full name/email/description complaint form,
+  // which stays for the general Account > Help & Support entry point.
+  final bool showComplaintForm;
+
+  const RHelpAndSupportscreen({super.key, this.showComplaintForm = true});
   @override
   State<RHelpAndSupportscreen> createState() => _RHelpAndSupportscreenState();
 }
@@ -71,30 +76,32 @@ class _RHelpAndSupportscreenState extends State<RHelpAndSupportscreen> {
           padding: EdgeInsets.symmetric(horizontal: size.width * 0.05),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             SizedBox(height: size.height * 0.02),
-            _label(AppLanguage.fullNameText[language], size),
-            CommonTextField(controller: fullNameController, hintText: AppLanguage.enterFullNText[language]),
-            SizedBox(height: size.height * 0.025),
-            _label(AppLanguage.emailText[language], size),
-            CommonTextField(controller: emailController, hintText: AppLanguage.enterEmailText[language], keyboardType: TextInputType.emailAddress),
-            SizedBox(height: size.height * 0.025),
-            _label(AppLanguage.descriptionText[language], size),
-            CommonTextField(controller: descriptionController, hintText: AppLanguage.writeText[language], isMultiline: true, height: 0.15),
-            SizedBox(height: size.height * 0.035),
-            Consumer<PostApiProvider>(builder: (ctx, api, _) => api.loading
-              ? const Center(child: CircularProgressIndicator(color: AppColor.themeColor))
-              : AppButton(text: AppLanguage.sendText[language], onPress: () {
-                  if (fullNameController.text.trim().isEmpty) { SnackBarToastMessage.showSnackBar(context, AppLanguage.fullNameMessage[language]); return; }
-                  if (descriptionController.text.trim().isEmpty) { SnackBarToastMessage.showSnackBar(context, AppLanguage.descriptionMessage[language]); return; }
-                  api.contactUsApiCalling(context, fullNameController.text.trim(), emailController.text.trim().isNotEmpty ? emailController.text.trim() : 'retailer@movigo.com', descriptionController.text.trim());
-                })),
-            SizedBox(height: size.height * 0.04),
-            Row(children: [
-              const Expanded(child: Divider(thickness: 1.5)),
-              Padding(padding: EdgeInsets.symmetric(horizontal: size.width * 0.03),
-                child: const Text('Or call Us', style: TextStyle(fontFamily: AppFont.fontFamily, fontSize: 14, color: AppColor.textColorTwo, fontWeight: FontWeight.w500))),
-              const Expanded(child: Divider(thickness: 1.5)),
-            ]),
-            SizedBox(height: size.height * 0.025),
+            if (widget.showComplaintForm) ...[
+              _label(AppLanguage.fullNameText[language], size),
+              CommonTextField(controller: fullNameController, hintText: AppLanguage.enterFullNText[language]),
+              SizedBox(height: size.height * 0.025),
+              _label(AppLanguage.emailText[language], size),
+              CommonTextField(controller: emailController, hintText: AppLanguage.enterEmailText[language], keyboardType: TextInputType.emailAddress),
+              SizedBox(height: size.height * 0.025),
+              _label(AppLanguage.descriptionText[language], size),
+              CommonTextField(controller: descriptionController, hintText: AppLanguage.writeText[language], isMultiline: true, height: 0.15),
+              SizedBox(height: size.height * 0.035),
+              Consumer<PostApiProvider>(builder: (ctx, api, _) => api.loading
+                ? const Center(child: CircularProgressIndicator(color: AppColor.themeColor))
+                : AppButton(text: AppLanguage.sendText[language], onPress: () {
+                    if (fullNameController.text.trim().isEmpty) { SnackBarToastMessage.showSnackBar(context, AppLanguage.fullNameMessage[language]); return; }
+                    if (descriptionController.text.trim().isEmpty) { SnackBarToastMessage.showSnackBar(context, AppLanguage.descriptionMessage[language]); return; }
+                    api.contactUsApiCalling(context, fullNameController.text.trim(), emailController.text.trim().isNotEmpty ? emailController.text.trim() : 'retailer@movigo.com', descriptionController.text.trim());
+                  })),
+              SizedBox(height: size.height * 0.04),
+              Row(children: [
+                const Expanded(child: Divider(thickness: 1.5)),
+                Padding(padding: EdgeInsets.symmetric(horizontal: size.width * 0.03),
+                  child: const Text('Or call Us', style: TextStyle(fontFamily: AppFont.fontFamily, fontSize: 14, color: AppColor.textColorTwo, fontWeight: FontWeight.w500))),
+                const Expanded(child: Divider(thickness: 1.5)),
+              ]),
+              SizedBox(height: size.height * 0.025),
+            ],
             Consumer<HelplineController>(builder: (ctx, hCtrl, _) {
               if (hCtrl.isLoading) return const Center(child: CircularProgressIndicator(color: AppColor.themeColor));
               if (hCtrl.helplineList.isEmpty) return const SizedBox.shrink();

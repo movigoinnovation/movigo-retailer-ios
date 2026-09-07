@@ -151,7 +151,7 @@ class _BookingTabDetailScreenState extends State<BookingTabDetailScreen> {
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: const SystemUiOverlayStyle(
-        statusBarColor: Colors.white,
+        statusBarColor: Colors.transparent,
         statusBarIconBrightness: Brightness.dark,
         statusBarBrightness: Brightness.light,
       ),
@@ -190,7 +190,40 @@ class _BookingTabDetailScreenState extends State<BookingTabDetailScreen> {
                   widget.bookingStatus == 'Picked Up';
 
               if (data == null) {
-                return const Center(child: Text("No booking data found"));
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          controller.errorMessage ?? 'No booking data found',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontFamily: AppFont.fontFamily,
+                            color: Colors.grey,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          onPressed: controller.isReassigned
+                              ? () => _handleBack()
+                              : () => Provider.of<BookingDetailController>(
+                                    context,
+                                    listen: false,
+                                  ).getBookingDetail(
+                                    context,
+                                    bookingId: widget.bookingId!,
+                                  ),
+                          child: Text(
+                            controller.isReassigned ? 'Go back' : 'Retry',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
               }
               return Container(
                 width: size.width,

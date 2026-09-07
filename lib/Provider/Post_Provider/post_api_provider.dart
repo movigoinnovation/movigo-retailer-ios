@@ -872,6 +872,7 @@ class PostApiProvider with ChangeNotifier {
     String senderPhone = '',
     String receiverName = '',
     String receiverPhone = '',
+    bool isPriorityPickup = false,
   }) async {
     setLoading(true);
     _lastErrorMessage = null;
@@ -914,6 +915,7 @@ class PostApiProvider with ChangeNotifier {
       // Receiver contact
       if (receiverName.isNotEmpty) 'receiver_name': receiverName,
       if (receiverPhone.isNotEmpty) 'receiver_phone': receiverPhone,
+      if (isPriorityPickup) 'is_priority_pickup': 'true',
     };
 
     // 🔹 Condition: Helper
@@ -1116,25 +1118,22 @@ class PostApiProvider with ChangeNotifier {
   }
 
   // ================= ACTIVE DRIVER RIDE GUARD ================= //
-  // Prevent customer-side/manual/auto cancellation from breaking a ride that has already
-  // been assigned to a driver. After driver acceptance, the ride should end only when
-  // that driver marks Delivered or cancels from driver side.
-  bool _isTerminalBookingStatus(dynamic rawStatus) {
+  // Retailer may cancel any time up to the driver physically reaching the
+  // pickup point — matches the backend's cancelByCustomer rule exactly
+  // (blocks Arrived/Pickup/Ongoing/Delivered/Cancelled; allows Pending/Accepted).
+  // Kept as a client-side pre-check purely for a nicer error message before
+  // hitting the API — the backend is still the source of truth either way.
+  bool _isNonCancellableBookingStatus(dynamic rawStatus) {
     final status = (rawStatus ?? '').toString().trim().toLowerCase();
-    return status == 'delivered' ||
+    return status == 'arrived' ||
+        status == 'pickup' ||
+        status == 'ongoing' ||
+        status == 'delivered' ||
         status == 'completed' ||
         status == 'complete' ||
         status == 'cancelled' ||
         status == 'canceled' ||
         status == 'rejected';
-  }
-
-  bool _hasAssignedDriver(Map<String, dynamic> data) {
-    final driverId = data['driver_id'] ?? data['driverId'] ?? data['driver'];
-    if (driverId == null) return false;
-    if (driverId is String) return driverId.trim().isNotEmpty;
-    if (driverId is Map) return (driverId['_id'] ?? driverId['id']) != null;
-    return true;
   }
 
   Future<bool> _canCustomerCancelBooking(
@@ -1158,12 +1157,11 @@ class PostApiProvider with ChangeNotifier {
 
     final bookingData = Map<String, dynamic>.from(data);
     final status = bookingData['booking_status'] ?? bookingData['status'];
-    final assigned = _hasAssignedDriver(bookingData);
 
-    if (assigned && !_isTerminalBookingStatus(status)) {
+    if (_isNonCancellableBookingStatus(status)) {
       SnackBarToastMessage.showSnackBar(
         context,
-        'Driver already accepted this ride. It can now be completed or cancelled by the assigned driver only.',
+        'Your driver has already reached the pickup point (or the ride has ended). Cancellation is no longer allowed.',
       );
       return false;
     }
@@ -1230,6 +1228,52 @@ class PostApiProvider with ChangeNotifier {
       SnackBarToastMessage.showSnackBar(context, errMsg);
       return false;
     }
+  }
+
+  // ==================== EDIT BOOKING LOCATION API ==================== //
+  // Backend recomputes price fresh from the new coordinates — never trust a
+  // client-computed fare here. Returns the full response (success/message
+  // plus the updated booking data with the new price) so the caller can show
+  // the new fare / surface a specific error (e.g. "driver already arrived").
+  Future<Map<String, dynamic>?> editBookingLocationApi(
+    BuildContext context, {
+    required String bookingId,
+    String? pickupAddress,
+    double? pickupLat,
+    double? pickupLng,
+    String? dropAddress,
+    double? dropLat,
+    double? dropLng,
+    // Full replacement list of intermediate stops (excludes the final drop) —
+    // pass [] to clear all stops, or omit entirely to leave stops unchanged.
+    List<Map<String, dynamic>>? stops,
+  }) async {
+    setLoading(true);
+    final Map<String, dynamic> body = {
+      if (pickupAddress != null) 'pickup_address': pickupAddress,
+      if (pickupLat != null) 'pickup_lat': pickupLat,
+      if (pickupLng != null) 'pickup_lng': pickupLng,
+      if (dropAddress != null) 'drop_address': dropAddress,
+      if (dropLat != null) 'drop_lat': dropLat,
+      if (dropLng != null) 'drop_lng': dropLng,
+      if (stops != null) 'stops': stops,
+    };
+
+    final res = await postJsonData(
+      'booking/edit_location/$bookingId',
+      body,
+      context,
+      headers: {
+        'Authorization': 'Bearer ${AppConstant.token}',
+        'Accept': 'application/json',
+      },
+    );
+    setLoading(false);
+
+    if (res != null && res['success'] == true) {
+      notifyListeners();
+    }
+    return res;
   }
 
   // ==================== LOGOUT API ==================== //
@@ -1350,6 +1394,107 @@ class PostApiProvider with ChangeNotifier {
   Future<Map<String, dynamic>?> getCoinRedeemRequestsApi(BuildContext context) async {
     final res = await getData(
       'coins/redeem-requests',
+      context,
+      headers: {'Authorization': 'Bearer ${AppConstant.token}'},
+    );
+    return res;
+  }
+
+  // Missions — "complete N delivered orders in the window, then claim X coins".
+  Future<Map<String, dynamic>?> getCoinMissionsApi(BuildContext context) async {
+    final res = await getData(
+      'coins/missions',
+      context,
+      headers: {'Authorization': 'Bearer ${AppConstant.token}'},
+    );
+    return res;
+  }
+
+  Future<Map<String, dynamic>?> claimCoinMissionApi(
+    BuildContext context, {
+    required String missionId,
+  }) async {
+    final res = await postJsonData(
+      'coins/missions/$missionId/claim',
+      {},
+      context,
+      headers: {'Authorization': 'Bearer ${AppConstant.token}'},
+    );
+    return res;
+  }
+
+  //
+
+  // ==================== BUSINESS MODE API ==================== //
+
+  Future<Map<String, dynamic>?> getBusinessStatusApi(BuildContext context) async {
+    final res = await getData(
+      'business/status',
+      context,
+      headers: {'Authorization': 'Bearer ${AppConstant.token}'},
+    );
+    return res;
+  }
+
+  Future<Map<String, dynamic>?> redeemBusinessLinkCodeApi(
+    BuildContext context, {
+    required String code,
+  }) async {
+    final res = await postJsonData(
+      'business/link-codes/redeem',
+      {'code': code},
+      context,
+      headers: {'Authorization': 'Bearer ${AppConstant.token}'},
+    );
+    return res;
+  }
+
+  Future<Map<String, dynamic>?> leaveBusinessApi(BuildContext context) async {
+    final res = await postData(
+      'business/leave',
+      context,
+      headers: {'Authorization': 'Bearer ${AppConstant.token}'},
+    );
+    return res;
+  }
+
+  Future<Map<String, dynamic>?> registerBusinessAccountApi(
+    BuildContext context, {
+    required String businessName,
+    required String gstNumber,
+  }) async {
+    final res = await postJsonData(
+      'business/register',
+      {'businessName': businessName, 'gstNumber': gstNumber},
+      context,
+      headers: {'Authorization': 'Bearer ${AppConstant.token}'},
+    );
+    return res;
+  }
+
+  //
+
+  // ==================== NOTICEBOARD API ==================== //
+
+  Future<Map<String, dynamic>?> getNoticesApi(BuildContext context) async {
+    final res = await getData(
+      'notices?audience=retailer',
+      context,
+      headers: {'Authorization': 'Bearer ${AppConstant.token}'},
+    );
+    return res;
+  }
+
+  //
+
+  // ==================== PROMO BANNER API ==================== //
+
+  // Home screen promo carousel — backend-driven so admin can add/edit/retire
+  // banners from the admin panel with no app update. See Backend
+  // GET /promo-banners?audience=retailer (returns 'retailer' + 'both').
+  Future<Map<String, dynamic>?> getPromoBannersApi(BuildContext context) async {
+    final res = await getData(
+      'promo-banners?audience=retailer',
       context,
       headers: {'Authorization': 'Bearer ${AppConstant.token}'},
     );

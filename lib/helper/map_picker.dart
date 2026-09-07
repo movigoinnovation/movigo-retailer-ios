@@ -11,6 +11,7 @@ import 'package:movigo/utilities/app_color.dart';
 import 'package:movigo/utilities/app_constant.dart';
 import 'package:movigo/utilities/app_font.dart';
 import 'package:movigo/helper/geocoding_utils.dart';
+import 'package:movigo/helper/places_session_token.dart';
 
 // ─── Indore service area constants ───────────────────────────────────────────
 const double _indoreLat = 22.7196;
@@ -22,8 +23,14 @@ const double _serviceRadiusKm = 50.0; // 50 km from Indore centre
 ///
 /// The pin is a plain overlay widget anchored to the screen centre, not a
 /// GoogleMap [Marker] — moving the map never has to redraw a marker, which is
-/// what keeps panning smooth on low-end devices. Reverse geocoding only ever
-/// fires once the camera settles (`onCameraIdle`), never while dragging.
+/// what keeps panning smooth on low-end devices.
+///
+/// Cost note: reverse geocoding does NOT fire on every pan/settle — that
+/// billed a Geocoding API call per camera-idle event and was the single
+/// biggest driver of Google Maps Platform cost. It now only fires once,
+/// lazily, when the user taps "Confirm Location" (or once on initial load
+/// for the pickup/current-location case) — same trigger discipline as the
+/// pre-rewrite tap-to-select picker, just kept on this UI.
 class MapPickerScreen extends StatefulWidget {
   final LatLng? initialLocation;
   final bool isDropLocation;
@@ -55,11 +62,18 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
 
   LatLng? _pendingTarget;
   int _geocodeRequestId = 0;
-  Timer? _idleDebounce;
+
+  // True once the pin has moved away from the last point we actually
+  // resolved an address for — gates the lazy, tap-to-confirm geocode call.
+  bool _needsGeocode = false;
+  LatLng? _lastGeocodedLocation;
 
   final TextEditingController searchController = TextEditingController();
   List<dynamic> searchResults = [];
   bool isSearching = false;
+  // Bundles an Autocomplete typing sequence + its terminating Details call
+  // into one billed Places session instead of billing every request alone.
+  String? _sessionToken;
 
   Timer? _debounce;
 
@@ -72,7 +86,6 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
-    _idleDebounce?.cancel();
     searchController.dispose();
     super.dispose();
   }
@@ -91,13 +104,14 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
 
     if (widget.isDropLocation) {
       // No known drop point yet — centre on Indore and let the user drag or
-      // search instead of guessing.
+      // search instead of guessing. Don't burn a geocode call on a guess
+      // nobody asked for; it resolves lazily once they pan or hit Confirm.
       selectedLocation = const LatLng(_indoreLat, _indoreLng);
       setState(() {
         isLoadingLocation = false;
         mapReady = true;
+        _needsGeocode = true;
       });
-      unawaited(getAddressFromLatLng(selectedLocation!));
       return;
     }
 
@@ -161,15 +175,25 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
     final target = _pendingTarget ?? selectedLocation;
     if (target == null) return;
 
+    // Service-area check is a local haversine calc — free, so it can still
+    // update live as the pin moves. The address itself is NOT re-fetched
+    // here; it resolves lazily on Confirm (see _movedSignificantly).
     setState(() {
       isMoving = false;
       selectedLocation = target;
+      isOutsideServiceArea = !_isWithinServiceArea(target);
+      _needsGeocode = _movedSignificantly(target, _lastGeocodedLocation);
     });
+  }
 
-    _idleDebounce?.cancel();
-    _idleDebounce = Timer(const Duration(milliseconds: 300), () {
-      getAddressFromLatLng(target);
-    });
+  // Treat the search/place-details flow's exact landing point as "already
+  // resolved" (avoids a redundant confirm-time geocode right after we just
+  // got the address from Place Details), while still catching a genuine
+  // user pan away from that point.
+  bool _movedSignificantly(LatLng a, LatLng? b) {
+    if (b == null) return true;
+    return _distanceInKm(a.latitude, a.longitude, b.latitude, b.longitude) >
+        0.03; // 30 metres
   }
 
   // ======= GET ADDRESS FROM LAT LNG (Google Geocoding API) ======= //
@@ -189,6 +213,8 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
         setState(() {
           selectedAddress = 'Outside service area';
           isLoading = false;
+          _needsGeocode = false;
+          _lastGeocodedLocation = pos;
         });
       }
       return;
@@ -216,9 +242,13 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
       setState(() {
         selectedAddress = address;
         isLoading = false;
+        _needsGeocode = false;
+        _lastGeocodedLocation = pos;
       });
     } catch (e) {
       if (requestId != _geocodeRequestId || !mounted) return;
+      // Leave _needsGeocode as-is so a retry (e.g. pressing Confirm again)
+      // attempts the lookup again instead of silently giving up.
       setState(() {
         selectedAddress = 'Unable to get address';
         isLoading = false;
@@ -254,6 +284,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
     }
 
     setState(() => isSearching = true);
+    _sessionToken ??= PlacesSessionToken.generate();
 
     final url =
         "https://maps.googleapis.com/maps/api/place/autocomplete/json"
@@ -261,6 +292,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
         "&location=$_indoreLat,$_indoreLng"
         "&radius=50000"
         "&strictbounds=true"
+        "&sessiontoken=$_sessionToken"
         "&key=${AppConstant.googleApiKey}";
 
     final response = await http.get(Uri.parse(url));
@@ -278,7 +310,12 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
   Future<void> getLatLngFromPlaceId(
       String placeId, String addressDescription) async {
     final url =
-        "https://maps.googleapis.com/maps/api/place/details/json?place_id=$placeId&key=${AppConstant.googleApiKey}";
+        "https://maps.googleapis.com/maps/api/place/details/json?place_id=$placeId"
+        "&fields=geometry,formatted_address"
+        "&sessiontoken=$_sessionToken"
+        "&key=${AppConstant.googleApiKey}";
+    // Details call ends the session — next search starts a fresh one.
+    _sessionToken = null;
 
     final response = await http.get(Uri.parse(url));
     if (!mounted) return;
@@ -294,11 +331,14 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
         isOutsideServiceArea = !_isWithinServiceArea(newLoc);
         searchResults = [];
         searchController.clear();
+        // We already have the exact address from the suggestion — mark it
+        // resolved so Confirm doesn't fire a redundant geocode call.
+        _needsGeocode = false;
+        _lastGeocodedLocation = newLoc;
       });
 
-      // We already have the exact address from the suggestion — bump the
-      // request id so the geocode reply that onCameraIdle will trigger after
-      // this animated move can't clobber it with a slower/looser result.
+      // Bump the request id so any in-flight geocode reply can't clobber
+      // this exact result with a slower/looser one.
       _geocodeRequestId++;
       mapController?.animateCamera(
         CameraUpdate.newCameraPosition(
@@ -306,6 +346,23 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
         ),
       );
     }
+  }
+
+  // ===================== CONFIRM ======================= //
+  // The one and only place a geocode call is guaranteed to fire for a
+  // deliberate placement — mirrors the old tap-to-select picker's trigger.
+  Future<void> _onConfirmPressed() async {
+    if (selectedLocation == null || isOutsideServiceArea) return;
+
+    if (_needsGeocode) {
+      await getAddressFromLatLng(selectedLocation!);
+      if (!mounted || isOutsideServiceArea) return;
+    }
+
+    Navigator.pop(context, {
+      "location": selectedLocation,
+      "address": selectedAddress,
+    });
   }
 
   // ===================== UI ======================= //
@@ -519,7 +576,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
                     ),
                     SizedBox(height: 8),
                     Text(
-                      selectedLocation == null
+                      selectedLocation == null || (_needsGeocode && !isLoading)
                           ? "Move the map to choose a location"
                           : isLoading
                               ? "Fetching address..."
@@ -561,12 +618,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
                                 isLoading ||
                                 isOutsideServiceArea)
                             ? null
-                            : () {
-                                Navigator.pop(context, {
-                                  "location": selectedLocation,
-                                  "address": selectedAddress,
-                                });
-                              },
+                            : _onConfirmPressed,
                         child: Text(
                           "Confirm Location",
                           style: TextStyle(

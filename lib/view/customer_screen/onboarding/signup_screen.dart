@@ -1,11 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter/gestures.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
@@ -42,14 +39,11 @@ class _SignupScreenState extends State<SignupScreen>
   // Retailer fields
   final _retailerNameCtrl  = TextEditingController();
   final _bizNameCtrl       = TextEditingController();
-  final _altPhoneCtrl      = TextEditingController();
-  final _bizAddressCtrl    = TextEditingController();
   final _gstCtrl           = TextEditingController();
 
   // Shared
   final _mobileCtrl = TextEditingController();
 
-  bool _fetchingLoc = false;
   bool _isTermsAgreed = false;
   String _termsUrl  = '';
   String _privacyUrl = '';
@@ -79,45 +73,10 @@ class _SignupScreenState extends State<SignupScreen>
   void dispose() {
     for (final c in [
       _customerNameCtrl, _customerAddressCtrl,
-      _retailerNameCtrl, _bizNameCtrl, _altPhoneCtrl,
-      _bizAddressCtrl, _gstCtrl, _mobileCtrl,
+      _retailerNameCtrl, _bizNameCtrl,
+      _gstCtrl, _mobileCtrl,
     ]) { c.dispose(); }
     super.dispose();
-  }
-
-  // ── Location ──────────────────────────────────────────────────────────────
-  Future<void> _fetchLocation() async {
-    setState(() => _fetchingLoc = true);
-    try {
-      var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied)
-        perm = await Geolocator.requestPermission();
-      if (perm == LocationPermission.denied ||
-          perm == LocationPermission.deniedForever) {
-        _snack('Location permission denied'); return;
-      }
-      final pos = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high);
-      final _gUri = Uri.parse(
-        'https://maps.googleapis.com/maps/api/geocode/json'
-        '?latlng=${pos.latitude},${pos.longitude}'
-        '&key=${AppConstant.googleApiKey}'
-        '&language=en',
-      );
-      final _gResp = await http.get(_gUri).timeout(const Duration(seconds: 6));
-      if (_gResp.statusCode == 200) {
-        final _gData = jsonDecode(_gResp.body) as Map<String, dynamic>;
-        final _gResults = _gData['results'] as List? ?? [];
-        if (_gResults.isNotEmpty) {
-          final addr = _gResults.first['formatted_address']?.toString() ?? '';
-          if (addr.isNotEmpty) setState(() => _bizAddressCtrl.text = addr);
-        }
-      }
-    } catch (_) {
-      _snack('Could not fetch location');
-    } finally {
-      if (mounted) setState(() => _fetchingLoc = false);
-    }
   }
 
   // ── Submit ─────────────────────────────────────────────────────────────────
@@ -126,12 +85,10 @@ class _SignupScreenState extends State<SignupScreen>
     final name    = _retailerNameCtrl.text.trim();
     final biz     = _bizNameCtrl.text.trim();
     final mobile  = _mobileCtrl.text.trim();
-    final address = _bizAddressCtrl.text.trim();
 
     if (name.isEmpty)    { _snack('Please enter your name'); return; }
     if (biz.isEmpty)     { _snack('Business name is required'); return; }
     if (mobile.length != 10) { _snack('Valid phone number required'); return; }
-    if (address.isEmpty) { _snack('Business address is required'); return; }
     if (!_isTermsAgreed) { _snack('Please agree to Terms and Privacy Policy'); return; }
 
     final p = Provider.of<PostApiProvider>(context, listen: false);
@@ -142,7 +99,7 @@ class _SignupScreenState extends State<SignupScreen>
       description:  '',
       email:        '',
       phoneNumber:  mobile,
-      address:      address,
+      address:      '',
       landmark:     _gstCtrl.text.trim().isNotEmpty
                       ? 'GST: ${_gstCtrl.text.trim()}' : '',
       profileImage: null,
@@ -348,79 +305,9 @@ class _SignupScreenState extends State<SignupScreen>
       _phoneField(_mobileCtrl, readOnly: true),
       _gap(size),
 
-      _label('Alternate Phone (optional)'),
-      _phoneField(_altPhoneCtrl, readOnly: false),
-      _gap(size),
-
-      _label('Business Address *'),
-      _addressField(size),
-      SizedBox(height: size.height * 0.005),
-      Row(children: [
-        const Icon(Icons.info_outline, size: 12,
-            color: AppColor.textColorTwo),
-        const SizedBox(width: 4),
-        Text('Tap 📍 to auto-fill current location',
-          style: TextStyle(fontSize: 11, color: Colors.grey.shade500,
-              fontFamily: AppFont.fontFamily)),
-      ]),
-      _gap(size),
-
       _label('GST Number (optional)'),
       _field(ctrl: _gstCtrl, hint: 'Enter GST number if applicable',
           kbt: TextInputType.text),
-    ],
-  );
-
-  // ── Address field with GPS button ──────────────────────────────────────────
-  Widget _addressField(Size size) => Stack(
-    children: [
-      TextField(
-        controller: _bizAddressCtrl,
-        maxLines: 3,
-        minLines: 2,
-        style: const TextStyle(
-            fontFamily: AppFont.fontFamily, fontSize: 15),
-        decoration: InputDecoration(
-          hintText: 'Enter address or tap 📍 for GPS',
-          hintStyle: TextStyle(
-              color: AppColor.hintTextColor,
-              fontSize: 14,
-              fontFamily: AppFont.fontFamily,
-              fontWeight: FontWeight.w400),
-          filled: true,
-          fillColor: AppColor.textFiledColor,
-          contentPadding:
-              const EdgeInsets.fromLTRB(16, 14, 52, 14),
-          border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(13),
-              borderSide: BorderSide.none),
-          focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(13),
-              borderSide: const BorderSide(
-                  color: AppColor.themeColor, width: 1.5)),
-        ),
-      ),
-      Positioned(
-        right: 10,
-        top: 10,
-        child: GestureDetector(
-          onTap: _fetchLocation,
-          child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: AppColor.themeColor,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: _fetchingLoc
-              ? const SizedBox(
-                  width: 16, height: 16,
-                  child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2))
-              : const Icon(Icons.my_location,
-                  color: Colors.white, size: 16),
-          ),
-        ),
-      ),
     ],
   );
 

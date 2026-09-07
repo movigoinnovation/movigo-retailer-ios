@@ -18,6 +18,8 @@ import 'package:movigo/Controller/get_booking_details_provider.dart';
 import 'package:movigo/helper/date_time_format/date_time_format.dart';
 import 'package:movigo/Provider/user_controller.dart';
 import 'package:movigo/view/customer_screen/new_booking_flow/retailer_confirm_screen.dart';
+import 'package:movigo/view/customer_screen/new_booking_flow/route_vehicle_screen.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
 
 class RCancelledBookingDetailScreen extends StatefulWidget {
   final Map<String, dynamic>? bookingData;
@@ -48,7 +50,6 @@ class _RCancelledBookingDetailScreenState
   }
 
 
-  @override
   void _bookAgain(Map<String, dynamic> booking) {
     final pickupLoc = booking['pickup_location'];
     final dropLoc   = booking['dropoff_location'];
@@ -59,6 +60,52 @@ class _RCancelledBookingDetailScreenState
     final double? dropLat   = double.tryParse(dropLoc['latitude']?.toString() ?? '');
     final double? dropLng   = double.tryParse(dropLoc['longitude']?.toString() ?? '');
     if (pickupLat == null || pickupLng == null || dropLat == null || dropLng == null) return;
+
+    // Multi-drop bookings carry every stop (final drop included) in extra_drops.
+    // Route those through the main vehicle-selection flow (RouteVehicleScreen
+    // → NewConfirmScreen), pre-filled and skipped straight to the booking
+    // phase, so stops/contacts aren't dropped and "Book Again" lands on the
+    // same screen as a normal booking would.
+    final List<dynamic> extraDrops = booking['extra_drops'] is List ? booking['extra_drops'] as List : [];
+    if (extraDrops.length > 1) {
+      final validDrops = <Map<String, dynamic>>[];
+      for (final d in extraDrops) {
+        if (d is! Map) continue;
+        final lat = double.tryParse(d['latitude']?.toString() ?? '');
+        final lng = double.tryParse(d['longitude']?.toString() ?? '');
+        if (lat == null || lng == null) continue;
+        validDrops.add({
+          'address':      (d['address'] ?? '').toString(),
+          'lat':          lat,
+          'lng':          lng,
+          'contactName':  (d['contact_name']  ?? '').toString(),
+          'contactPhone': (d['contact_phone'] ?? '').toString(),
+        });
+      }
+      if (validDrops.length > 1) {
+        // extra_drops' last entry is the final destination — the rest are
+        // the intermediate stops RouteVehicleScreen's _extraStops expects.
+        final finalStop = validDrops.removeLast();
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => RouteVehicleScreen(
+              pickupLatLng:        LatLng(pickupLat, pickupLng),
+              pickupAddress:       (pickupLoc['address'] ?? '').toString(),
+              pickupContactName:   (booking['sender_name']  ?? booking['customer_name']  ?? '').toString(),
+              pickupContactPhone:  (booking['sender_phone'] ?? booking['customer_phone'] ?? '').toString(),
+              dropLatLng:          LatLng(finalStop['lat'] as double, finalStop['lng'] as double),
+              dropAddress:         finalStop['address'] as String,
+              dropContactName:     finalStop['contactName'] as String,
+              dropContactPhone:    finalStop['contactPhone'] as String,
+              initialExtraStops:   validDrops,
+              skipLocationPhase:   true,
+            ),
+          ),
+        );
+        return;
+      }
+    }
 
     int wc(String tag) {
       final t = tag.toLowerCase();
@@ -100,6 +147,7 @@ class _RCancelledBookingDetailScreenState
           initialSenderPhone:   (booking['sender_phone'] ?? booking['customer_phone'] ?? '').toString(),
           initialNote:          (booking['note'] ?? '').toString(),
           initialGoodsTypeId:   extractId(booking['item_category_id']),
+          initialIsPriorityPickup: booking['isPriorityPickup'] == true,
         ),
       ),
     );
@@ -211,7 +259,7 @@ class _RCancelledBookingDetailScreenState
 
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(
-        statusBarColor: Colors.white,
+        statusBarColor: Colors.transparent,
         statusBarIconBrightness: Brightness.dark,
       ),
     );

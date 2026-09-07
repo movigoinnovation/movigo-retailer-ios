@@ -19,12 +19,16 @@ import 'package:movigo/utilities/app_font.dart';
 import 'package:movigo/utilities/app_footer.dart';
 import 'package:movigo/utilities/app_image.dart';
 import 'package:movigo/utilities/local_notification_service.dart';
+import 'package:movigo/utilities/location_service_helper.dart';
 import 'package:movigo/utilities/app_config_provider.dart';
+import 'package:movigo/services/in_app_update_service.dart';
+import 'package:movigo/main.dart' show MyApp;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:movigo/view/customer_screen/create_booking_screen/finding_driver_screen.dart';
 import 'language_selection_screen.dart';
 import 'onboardingone_screen.dart';
 import 'force_update_screen.dart';
+import 'SoftUpdatePopup.dart';
 
 import 'signup_screen.dart';
 
@@ -109,7 +113,12 @@ class _SplashScreenState extends State<SplashScreen> {
   Future<void> _requestLocationPermission() async {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return;
+      if (!serviceEnabled) {
+        // Ask once at startup; if the retailer ignores it, the home screen's
+        // search bar asks again before falling back to an empty pickup.
+        serviceEnabled = await LocationServiceHelper.ensureEnabled();
+        if (!serviceEnabled) return;
+      }
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
@@ -301,7 +310,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<bool> _checkForceUpdate() async {
     try {
-      int buildNumber = 16; // sync with pubspec version code
+      int buildNumber = 50; // sync with pubspec version code
       try {
         const channel = MethodChannel('com.movigo.retailer/permissions');
         final raw = await channel.invokeMapMethod<String, dynamic>('getAppVersion');
@@ -318,23 +327,67 @@ class _SplashScreenState extends State<SplashScreen> {
         '?app_type=$appType&version_code=$buildNumber',
       );
       final resp = await http
-          .get(url, headers: {'Content-Type': 'application/json'})
+          .get(url, headers: {
+            'Content-Type': 'application/json',
+            // Best-effort: if a session token is already cached (returning
+            // user, not a fresh install), the backend uses it to also drop
+            // an "Update Available" entry into the retailer's notification
+            // inbox.
+            if (AppConstant.token.isNotEmpty) 'Authorization': 'Bearer ${AppConstant.token}',
+          })
           .timeout(const Duration(seconds: 6));
       if (resp.statusCode == 200) {
         final body = json.decode(resp.body);
         if (body['success'] == true && body['data'] != null) {
           final data = body['data'];
-          if (data['force_update'] == true && mounted) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ForceUpdateScreen(
-                  latestVersion: (data['latest_version'] ?? '').toString(),
-                  playStoreUrl:  (data['play_store_url']  ?? '').toString(),
-                ),
-              ),
+          final bool forceUpdate = data['force_update'] == true;
+
+          if (forceUpdate) {
+            // Backend's own version gate decides immediate vs flexible, not
+            // Play Console's staged-rollout priority. Try Play's native
+            // full-screen blocking flow first; only fall back to our own
+            // ForceUpdateScreen if that isn't available (e.g. sideloaded
+            // build, no Play Store on device).
+            final started = await InAppUpdateService.instance.check(
+              MyApp.navigatorKey.currentContext,
+              forceUpdate: true,
             );
+            if (started) return true;
+
+            if (mounted) {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ForceUpdateScreen(
+                    latestVersion: (data['latest_version'] ?? '').toString(),
+                    playStoreUrl:  (data['play_store_url']  ?? '').toString(),
+                  ),
+                ),
+              );
+            }
             return true;
+          } else {
+            // Not force-required — offer a flexible (backgrounded) update.
+            unawaited(InAppUpdateService.instance.check(
+              MyApp.navigatorKey.currentContext,
+              forceUpdate: false,
+            ));
+
+            // A newer build has been published but isn't mandatory yet —
+            // show a dismissible popup so the retailer can update on their
+            // own terms instead of only relying on Play's silent flow.
+            if (data['update_available'] == true) {
+              final ctx = MyApp.navigatorKey.currentContext;
+              if (ctx != null) {
+                unawaited(SoftUpdatePopup.showIfNeeded(
+                  ctx,
+                  latestVersion: (data['latest_version'] ?? '').toString(),
+                  latestVersionCode:
+                      int.tryParse(data['latest_version_code']?.toString() ?? '') ?? 0,
+                  playStoreUrl: (data['play_store_url'] ?? '').toString(),
+                ));
+              }
+            }
           }
         }
       }
@@ -400,6 +453,7 @@ class _SplashScreenState extends State<SplashScreen> {
             'assets/icons/movigo_app_logo2.png',
             width: size.width * 0.6,
             fit: BoxFit.contain,
+            cacheWidth: (size.width * 0.6 * MediaQuery.of(context).devicePixelRatio).round(),
           ),
         ),
       ),

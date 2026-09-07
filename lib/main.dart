@@ -16,7 +16,6 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'Provider/app_provider/app_provider.dart';
 import 'Provider/app_provider/theme_provider.dart';
-import 'utilities/app_constant.dart';
 import 'utilities/fcm_token_service.dart';
 import 'utilities/local_notification_service.dart';
 import 'utilities/no_internet.dart';
@@ -68,18 +67,30 @@ Future<void> main() async {
   // This satisfies the Android Vitals cold start requirement.
   runApp(const MyApp());
 
-  // Run slow/network initializations in the background
-  _initializeDependenciesInBackground();
+  // Wait for the first frame to actually render before touching any
+  // platform channel (Firebase, notifications, ...). Firing this right
+  // after runApp() with no yield can race ahead of the engine attaching
+  // its BinaryMessenger on a cold start, throwing
+  // PlatformException(channel-error, "Unable to establish connection on
+  // channel.") for every plugin call in this block — which silently
+  // skipped Firebase/FCM setup for the whole session (retailers never
+  // got a real push token, see coins push notification investigation).
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    _initializeDependenciesInBackground();
+  });
 }
 
 Future<void> _initializeDependenciesInBackground() async {
   // Edge-to-edge: let content draw behind both status bar and nav bar.
-  // Each screen controls its own overlay colours via SystemUiOverlayStyle.
+  // Under SystemUiMode.edgeToEdge Flutter already renders both system bars
+  // fully transparent, so we deliberately do NOT set statusBarColor /
+  // systemNavigationBarColor / systemNavigationBarDividerColor here: passing
+  // those makes the Android embedding call Window.setStatusBarColor(),
+  // setNavigationBarColor() and setNavigationBarDividerColor(), all of which
+  // are deprecated in Android 15 (SDK 35) and flagged by Play Console.
+  // Only the icon brightness is set.
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    systemNavigationBarColor: Colors.transparent,
-    systemNavigationBarDividerColor: Colors.transparent,
     systemNavigationBarIconBrightness: Brightness.dark,
     statusBarIconBrightness: Brightness.dark,
   ));
@@ -96,6 +107,10 @@ Future<void> _initializeDependenciesInBackground() async {
     ]).catchError((_) {});
   }
 
+  await _runBackgroundInit(attempt: 1);
+}
+
+Future<void> _runBackgroundInit({required int attempt}) async {
   try {
     // Initialize Firebase first
     if (Firebase.apps.isEmpty) {
@@ -107,7 +122,15 @@ Future<void> _initializeDependenciesInBackground() async {
     // Platform-specific notification setup
     await _setupNotifications();
   } catch (e) {
-    print('❌ Error in background init: $e');
+    print('❌ Error in background init (attempt $attempt): $e');
+    // On a fresh cold start this can race ahead of the platform channel
+    // being attached (PlatformException channel-error) and silently skip
+    // Firebase/FCM setup for the whole session — retry once after the
+    // engine has had a moment to finish attaching.
+    if (attempt < 3) {
+      await Future<void>.delayed(Duration(milliseconds: 500 * attempt));
+      await _runBackgroundInit(attempt: attempt + 1);
+    }
   }
 }
 
@@ -145,15 +168,12 @@ Future<void> _setupNotifications() async {
       print('✅ Android Permission: ${settings.authorizationStatus}');
     }
 
-    // Get FCM Token (common for both platforms)
-    String? fcmToken = await FirebaseMessaging.instance.getToken();
-    if (kDebugMode) {
-      print('✅ FCM Token: $fcmToken');
-    }
-
-    if (fcmToken != null) {
-      AppConstant.playerID = fcmToken;
-    }
+    // Get FCM token, store it, push it to the backend, and keep it in sync
+    // on refresh — same shared service Drivers_app uses. The old inline
+    // `getToken()` call here only ever stored the token locally and never
+    // sent it to the backend, so retailers' player_id stayed empty/stale
+    // and push notifications silently never arrived.
+    await FcmTokenService.generateAndStoreToken();
 
     // Initialize local notifications
     await LocalNotificationService.initialize();
@@ -198,6 +218,9 @@ void _handleNotificationNavigation(RemoteMessage message) {
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
+  static final GlobalKey<NavigatorState> navigatorKey =
+      GlobalKey<NavigatorState>();
+
   @override
   State<MyApp> createState() => _MyAppState();
 }
@@ -206,8 +229,7 @@ class _MyAppState extends State<MyApp> {
   ConnectionStatus status = ConnectionStatus.WiFi;
   final Connectivity _connectivity = Connectivity();
   StreamSubscription<List<ConnectivityResult>>? _subscription;
-  static final GlobalKey<NavigatorState> _navigatorKey =
-      GlobalKey<NavigatorState>();
+  static final GlobalKey<NavigatorState> _navigatorKey = MyApp.navigatorKey;
 
   @override
   void initState() {
@@ -357,9 +379,10 @@ class _MyAppState extends State<MyApp> {
 
   @override
   Widget build(BuildContext context) {
+    // No statusBarColor here: edge-to-edge keeps it transparent already and
+    // setting it invokes the deprecated Window.setStatusBarColor() on SDK 35.
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
         statusBarIconBrightness: Brightness.dark,
       ),
     );

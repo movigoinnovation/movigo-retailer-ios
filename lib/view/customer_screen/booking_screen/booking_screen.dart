@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -16,9 +18,7 @@ import 'package:movigo/utilities/app_language.dart';
 import 'package:movigo/view/customer_screen/create_booking_screen/booking_detail_screen.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:movigo/view/customer_screen/new_booking_flow/retailer_confirm_screen.dart';
-import 'package:movigo/view/retailer_screen/retailer_booking_screen/accept_booking_detail_screen.dart';
-import 'package:movigo/view/retailer_screen/retailer_booking_screen/arrived_booking_detail_screen.dart';
-import 'package:movigo/view/retailer_screen/retailer_booking_screen/pickup_booking_detail_screen.dart';
+import 'package:movigo/view/customer_screen/new_booking_flow/route_vehicle_screen.dart';
 import 'package:movigo/view/retailer_screen/retailer_booking_screen/delivered_booking_detail_screen.dart';
 import 'package:movigo/view/retailer_screen/retailer_booking_screen/cancelled_booking_detail_screen.dart';
 import 'package:movigo/view/retailer_screen/retailer_booking_screen/upcoming_booking_detail_screen.dart';
@@ -32,6 +32,9 @@ class BookingScreen extends StatefulWidget {
 
 class _BookingScreenState extends State<BookingScreen> {
   String userId = "";
+  final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  Timer? _searchDebounce;
 
   @override
   void initState() {
@@ -50,6 +53,36 @@ class _BookingScreenState extends State<BookingScreen> {
       final controller =
           Provider.of<AcceptedBookingController>(context, listen: false);
       controller.getBookings(context, bookingKey: 'all');
+    });
+    _scrollController.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
+      final controller =
+          Provider.of<AcceptedBookingController>(context, listen: false);
+      if (controller.hasMore && !controller.isLoadingMore) {
+        controller.getBookings(context, bookingKey: 'all', isPagination: true);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchController.dispose();
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() {}); // reflect the clear-button visibility immediately
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+      Provider.of<AcceptedBookingController>(context, listen: false)
+          .getBookings(context, bookingKey: 'all', search: value);
     });
   }
 
@@ -95,6 +128,52 @@ class _BookingScreenState extends State<BookingScreen> {
         const SnackBar(content: Text('Location details missing for this booking.')),
       );
       return;
+    }
+
+    // Multi-drop bookings carry every stop (final drop included) in extra_drops.
+    // Route those through the main vehicle-selection flow (RouteVehicleScreen
+    // → NewConfirmScreen), pre-filled and skipped straight to the booking
+    // phase, so stops/contacts aren't dropped and "Book Again" lands on the
+    // same screen as a normal booking would.
+    final List<dynamic> extraDrops = item['extra_drops'] is List ? item['extra_drops'] as List : [];
+    if (extraDrops.length > 1) {
+      final validDrops = <Map<String, dynamic>>[];
+      for (final d in extraDrops) {
+        if (d is! Map) continue;
+        final lat = _toDouble(d['latitude']);
+        final lng = _toDouble(d['longitude']);
+        if (lat == null || lng == null) continue;
+        validDrops.add({
+          'address':      (d['address'] ?? '').toString(),
+          'lat':          lat,
+          'lng':          lng,
+          'contactName':  (d['contact_name']  ?? '').toString(),
+          'contactPhone': (d['contact_phone'] ?? '').toString(),
+        });
+      }
+      if (validDrops.length > 1) {
+        // extra_drops' last entry is the final destination — the rest are
+        // the intermediate stops RouteVehicleScreen's _extraStops expects.
+        final finalStop = validDrops.removeLast();
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => RouteVehicleScreen(
+              pickupLatLng:        LatLng(pickupLat, pickupLng),
+              pickupAddress:       (pickupLoc['address'] ?? '').toString(),
+              pickupContactName:   (item['sender_name']  ?? item['customer_name']  ?? '').toString(),
+              pickupContactPhone:  (item['sender_phone'] ?? item['customer_phone'] ?? '').toString(),
+              dropLatLng:          LatLng(finalStop['lat'] as double, finalStop['lng'] as double),
+              dropAddress:         finalStop['address'] as String,
+              dropContactName:     finalStop['contactName'] as String,
+              dropContactPhone:    finalStop['contactPhone'] as String,
+              initialExtraStops:   validDrops,
+              skipLocationPhase:   true,
+            ),
+          ),
+        );
+        return;
+      }
     }
 
     int wheelCount(String tag) {
@@ -147,6 +226,7 @@ class _BookingScreenState extends State<BookingScreen> {
           initialSenderPhone:   (item['sender_phone'] ?? item['customer_phone'] ?? '').toString(),
           initialNote:          (item['note'] ?? '').toString(),
           initialGoodsTypeId:   extractId(item['item_category_id']),
+          initialIsPriorityPickup: item['isPriorityPickup'] == true,
         ),
       ),
     );
@@ -177,7 +257,50 @@ class _BookingScreenState extends State<BookingScreen> {
                   color: AppColor.blackColor,
                 ),
               ),
-              SizedBox(height: size.height * 0.02),
+              SizedBox(height: size.height * 0.015),
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: size.width * 0.04),
+                child: TextField(
+                  controller: _searchController,
+                  keyboardType: TextInputType.phone,
+                  onChanged: _onSearchChanged,
+                  style: const TextStyle(
+                    fontFamily: AppFont.fontFamily,
+                    fontSize: 14,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: 'Search by contact number',
+                    hintStyle: TextStyle(
+                      fontFamily: AppFont.fontFamily,
+                      fontSize: 13,
+                      color: Colors.grey.shade500,
+                    ),
+                    prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                    suffixIcon: _searchController.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.close_rounded, size: 18),
+                            onPressed: () {
+                              _searchController.clear();
+                              _onSearchChanged('');
+                            },
+                          )
+                        : null,
+                    contentPadding:
+                        const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                    filled: true,
+                    fillColor: const Color(0xffF7F9FC),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: Colors.grey.shade300),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: AppColor.themeColor),
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(height: size.height * 0.015),
               Expanded(
                 child: Consumer<AcceptedBookingController>(
                   builder: (_, controller, __) {
@@ -204,6 +327,7 @@ class _BookingScreenState extends State<BookingScreen> {
 
                     return _bookingList(
                       list: list,
+                      isLoadingMore: controller.isLoadingMore,
                       onTap: (item) => Get.to(() => BookingDetailScreen(
                             bookingId: item['_id'],
                           )),
@@ -221,6 +345,7 @@ class _BookingScreenState extends State<BookingScreen> {
   Widget _bookingList({
     required List list,
     required Function(Map item) onTap,
+    bool isLoadingMore = false,
   }) {
     return RefreshIndicator(
       onRefresh: () async {
@@ -232,9 +357,22 @@ class _BookingScreenState extends State<BookingScreen> {
         );
       },
       child: ListView.builder(
+        controller: _scrollController,
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: list.length,
+        itemCount: list.length + (isLoadingMore ? 1 : 0),
         itemBuilder: (context, index) {
+          if (index >= list.length) {
+            return const Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Center(
+                child: SizedBox(
+                  height: 24,
+                  width: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                ),
+              ),
+            );
+          }
           final item = list[index];
           final String status =
               (item['booking_status'] ?? '').toString();
@@ -528,8 +666,9 @@ class _BookingScreenState extends State<BookingScreen> {
                       const SizedBox(height: 2),
                       Text(
                         pickup,
-                        maxLines: 1,
+                        maxLines: 3,
                         overflow: TextOverflow.ellipsis,
+                        softWrap: true,
                         style: const TextStyle(
                           fontSize: 12,
                           color: Colors.grey,
@@ -568,8 +707,9 @@ class _BookingScreenState extends State<BookingScreen> {
                       const SizedBox(height: 2),
                       Text(
                         drop,
-                        maxLines: 1,
+                        maxLines: 3,
                         overflow: TextOverflow.ellipsis,
+                        softWrap: true,
                         style: const TextStyle(
                           fontSize: 12,
                           color: Colors.grey,

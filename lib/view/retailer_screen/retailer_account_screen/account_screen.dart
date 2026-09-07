@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:movigo/view/customer_screen/account_screen/privacy_policy_screen.dart';
@@ -8,6 +9,8 @@ import 'package:movigo/view/customer_screen/account_screen/terms_and_conditions_
 import 'package:movigo/view/customer_screen/onboarding/login_screen.dart';
 import 'package:movigo/view/retailer_screen/retailer_account_screen/profile_screen.dart';
 import 'package:movigo/view/retailer_screen/retailer_account_screen/business_profile_screen.dart';
+import 'package:movigo/view/retailer_screen/retailer_account_screen/join_business_screen.dart';
+import 'package:movigo/view/retailer_screen/retailer_account_screen/register_business_screen.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -33,6 +36,297 @@ class RAccountScreen extends StatefulWidget {
 
 class _RAccountScreenState extends State<RAccountScreen> {
   bool _isLoggingOut = false;
+
+  // ── Business Mode (Stage 2b/2c) ─────────────────────────────────────────
+  // Fetched fresh on every screen load rather than trusted from the cached
+  // user_details blob — a business name/status is only known server-side
+  // (Retailer.businessAccountId points at it), and this indicator must stay
+  // correct after a suspend/leave that happened elsewhere (owner panel,
+  // admin action) between app sessions.
+  Map<String, dynamic>? _businessStatus;
+  bool _loadingBusinessStatus = true;
+
+  String _versionName = '';
+  String _versionCode = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchBusinessStatus();
+    _fetchAppVersion();
+  }
+
+  Future<void> _fetchAppVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (mounted) {
+        setState(() {
+          _versionName = info.version;
+          _versionCode = info.buildNumber;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _fetchBusinessStatus() async {
+    final provider = Provider.of<PostApiProvider>(context, listen: false);
+    final res = await provider.getBusinessStatusApi(context);
+    if (!mounted) return;
+    setState(() {
+      _businessStatus = (res != null && res['success'] == true) ? res['data'] as Map<String, dynamic>? : null;
+      _loadingBusinessStatus = false;
+    });
+  }
+
+  Future<void> _openJoinBusiness() async {
+    final linked = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const JoinBusinessScreen()),
+    );
+    if (linked == true) _fetchBusinessStatus();
+  }
+
+  Future<void> _openRegisterBusiness() async {
+    final submitted = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const RegisterBusinessScreen()),
+    );
+    if (submitted == true) _fetchBusinessStatus();
+  }
+
+  Future<void> _confirmLeaveBusiness(String businessName) async {
+    final size = MediaQuery.of(context).size;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.6),
+      builder: (dialogContext) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: size.width * 0.88,
+            padding: EdgeInsets.symmetric(horizontal: size.width * 0.05, vertical: size.height * 0.029),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Leave $businessName?',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 18.5, fontWeight: FontWeight.w500, fontFamily: AppFont.fontFamily, color: AppColor.blackColor),
+                ),
+                SizedBox(height: size.height * 0.012),
+                const Text(
+                  'You will stop getting business rates and go back to normal pricing on your next booking. No approval is needed from the business owner.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12.4, fontWeight: FontWeight.w400, fontFamily: AppFont.fontFamily, color: AppColor.hinttextColor),
+                ),
+                SizedBox(height: size.height * 0.040),
+                Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => Navigator.pop(dialogContext, false),
+                        child: Container(
+                          height: size.height * 0.06,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: AppColor.primaryColor),
+                          ),
+                          child: const Center(
+                            child: Text('Cancel', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, fontFamily: AppFont.fontFamily, color: AppColor.primaryColor)),
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: size.width * 0.04),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => Navigator.pop(dialogContext, true),
+                        child: Container(
+                          height: size.height * 0.06,
+                          decoration: BoxDecoration(color: AppColor.primaryColor, borderRadius: BorderRadius.circular(10)),
+                          child: const Center(
+                            child: Text('Leave', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, fontFamily: AppFont.fontFamily, color: Colors.white)),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    final provider = Provider.of<PostApiProvider>(context, listen: false);
+    final res = await provider.leaveBusinessApi(context);
+    if (!mounted) return;
+    if (res != null && res['success'] == true) {
+      SnackBarToastMessage.showSnackBar(context, 'You have left the business');
+      _fetchBusinessStatus();
+    }
+  }
+
+  Widget _businessStatusSection(Size size) {
+    if (_loadingBusinessStatus) return const SizedBox.shrink();
+
+    final linked = _businessStatus?['linked'] == true;
+    if (!linked) {
+      final owned = _businessStatus?['ownedAccount'] as Map<String, dynamic>?;
+      if (owned != null && owned['status'] == 'pending_approval') {
+        return Padding(
+          padding: EdgeInsets.only(bottom: size.height * 0.025),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF9C3),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFFDE68A)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.hourglass_top_rounded, color: Color(0xFF854D0E), size: 22),
+                SizedBox(width: size.width * 0.03),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('${owned['businessName']} — awaiting approval',
+                          style: const TextStyle(fontFamily: AppFont.fontFamily, fontWeight: FontWeight.w700, fontSize: 13, color: Color(0xFF854D0E))),
+                      const SizedBox(height: 2),
+                      const Text('Our team is reviewing your GST details.',
+                          style: TextStyle(fontFamily: AppFont.fontFamily, fontSize: 11, color: Color(0xFF854D0E))),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+
+      final rejectedReason = (owned != null && owned['status'] == 'rejected') ? (owned['rejectionReason']?.toString() ?? '') : null;
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (rejectedReason != null)
+            Padding(
+              padding: EdgeInsets.only(bottom: size.height * 0.015),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEE2E2),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFFECACA)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline_rounded, color: Color(0xFF991B1B), size: 22),
+                    SizedBox(width: size.width * 0.03),
+                    Expanded(
+                      child: Text(
+                        rejectedReason.isNotEmpty ? 'Registration rejected: $rejectedReason' : 'Your business registration was rejected.',
+                        style: const TextStyle(fontFamily: AppFont.fontFamily, fontSize: 12, color: Color(0xFF991B1B)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          Padding(
+            padding: EdgeInsets.only(bottom: size.height * 0.01),
+            child: InkWell(
+              onTap: _openJoinBusiness,
+              child: Row(
+                children: [
+                  const Icon(Icons.groups_2_rounded, size: 22, color: AppColor.blackColor),
+                  SizedBox(width: size.width * 0.04),
+                  const Expanded(
+                    child: Text(
+                      'Join a Business',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, fontFamily: AppFont.fontFamily, color: AppColor.blackColor),
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right_rounded, size: 20, color: AppColor.blackColor),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.only(bottom: size.height * 0.01),
+            child: InkWell(
+              onTap: _openRegisterBusiness,
+              child: Row(
+                children: [
+                  const Icon(Icons.domain_add_rounded, size: 22, color: AppColor.blackColor),
+                  SizedBox(width: size.width * 0.04),
+                  const Expanded(
+                    child: Text(
+                      'Register My Business',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, fontFamily: AppFont.fontFamily, color: AppColor.blackColor),
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right_rounded, size: 20, color: AppColor.blackColor),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    final businessName = (_businessStatus?['businessName'] ?? 'your business').toString();
+    return Padding(
+      padding: EdgeInsets.only(bottom: size.height * 0.025),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColor.themeColor.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColor.themeColor.withOpacity(0.15)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(color: AppColor.themeColor.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.groups_2_rounded, color: AppColor.themeColor, size: 22),
+            ),
+            SizedBox(width: size.width * 0.03),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Linked to $businessName',
+                      style: const TextStyle(fontFamily: AppFont.fontFamily, fontWeight: FontWeight.w700, fontSize: 13, color: AppColor.blackColor)),
+                  const SizedBox(height: 2),
+                  const Text('Your bookings now use business rates',
+                      style: TextStyle(fontFamily: AppFont.fontFamily, fontSize: 11, color: AppColor.textColorTwo)),
+                ],
+              ),
+            ),
+            InkWell(
+              onTap: () => _confirmLeaveBusiness(businessName),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                child: Text('Leave', style: TextStyle(fontFamily: AppFont.fontFamily, fontSize: 12, fontWeight: FontWeight.w600, color: Colors.red)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -173,7 +467,12 @@ class _RAccountScreenState extends State<RAccountScreen> {
                     },
                   ),
 
-                  SizedBox(height: size.height * 0.04),
+                  SizedBox(height: size.height * 0.03),
+
+                  // ── Business Mode: linked-to-business indicator / join entry point ──
+                  _businessStatusSection(size),
+
+                  SizedBox(height: size.height * 0.01),
 
                   // ── Business Profile (Retailer only) ────────────────────
                   _menuItem(
@@ -263,52 +562,21 @@ class _RAccountScreenState extends State<RAccountScreen> {
                       logoutPopup(context);
                     },
                   ),
-                  SizedBox(height: size.height * 0.01),
 
-                  /// DELETE ACCOUNT
-                  Padding(
-                    padding: EdgeInsets.only(bottom: size.height * 0.02),
-                    child: InkWell(
-                      onTap: () async {
-                        final uri = Uri.parse(
-                            'https://movigoinnovations.com/delete-account.html');
-                        try {
-                          await launchUrl(uri, mode: LaunchMode.externalApplication);
-                        } catch (_) {
-                          if (context.mounted) {
-                            SnackBarToastMessage.showSnackBar(
-                                context, 'Could not open the delete account page.');
-                          }
-                        }
-                      },
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.delete_outline_rounded,
-                            size: size.height * 0.030,
-                            color: Colors.red.shade600,
-                          ),
-                          SizedBox(width: size.width * 0.04),
-                          Expanded(
-                            child: Text(
-                              'Delete Account',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                                fontFamily: AppFont.fontFamily,
-                                color: Colors.red.shade600,
-                              ),
-                            ),
-                          ),
-                          Image.asset(
-                            AppImage.arrowAcc,
-                            height: 16,
-                            width: 16,
-                          ),
-                        ],
+                  if (_versionName.isNotEmpty) ...[
+                    SizedBox(height: size.height * 0.02),
+                    Center(
+                      child: Text(
+                        'Version $_versionName (Build $_versionCode)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontFamily: AppFont.fontFamily,
+                          color: Colors.grey.shade500,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                  ),
+                  ],
 
                   SizedBox(height: size.height * 0.04),
                 ],

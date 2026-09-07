@@ -1,5 +1,4 @@
-﻿import 'dart:ui' as ui;
-import 'package:movigo/utilities/app_header.dart';
+import 'dart:ui' as ui;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -27,19 +26,8 @@ import 'package:movigo/utilities/app_language.dart';
 import 'bookingHelpAndSupport.dart';
 import 'cancellation_policy_screen.dart';
 import 'finding_driver_screen.dart';
+import 'package:movigo/view/retailer_screen/retailer_booking_screen/edit_booking_location_screen.dart';
 import 'package:movigo/view/customer_screen/coins/coin_scratch_card_screen.dart';
-
-class _RouteInfo {
-  final List<LatLng> points;
-  final String durationText;
-  final String distanceText;
-
-  const _RouteInfo({
-    required this.points,
-    this.durationText = '',
-    this.distanceText = '',
-  });
-}
 
 class BookingDetailScreen extends StatefulWidget {
   final String bookingId;
@@ -61,7 +49,7 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
   bool _assetsLoaded = false;
 
   Future<void> _loadAssetImages() async {
-    _scooterImage = await _loadUiImage(AppImage.twowheel);
+    _scooterImage = await _loadUiImage(AppImage.topViewBike);
     _miniTruckImage = await _loadUiImage(AppImage.minitruck);
     _largeTruckImage = await _loadUiImage(AppImage.largetruck);
     if (mounted) {
@@ -152,27 +140,45 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
       canvas.drawPath(pointerPath, bubblePaint);
       canvas.drawPath(pointerPath, borderPaint);
 
-      // ── Draw circular background for vehicle icon ──
-      final double vehicleY = pointerY + 5.0;
-      final circleRadius = 28.0;
-      final circleCenter = Offset(canvasWidth / 2, vehicleY + circleRadius);
+      // ── Draw circular background for vehicle icon OR draw top-view bike rider directly ──
+      final bool isScooter = vehicleImage == _scooterImage;
 
-      canvas.drawCircle(circleCenter.translate(0, 1.5), circleRadius, shadowPaint);
-      canvas.drawCircle(circleCenter, circleRadius, Paint()..color = AppColor.themeColor..style = PaintingStyle.fill);
-      canvas.drawCircle(circleCenter, circleRadius - 1.5, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 2.5);
+      if (isScooter) {
+        // Draw the top view of the bike rider directly in its full original colors!
+        // No circle wrapper, no white background, just the clean transparent bike rider icon!
+        final double bikeSize = 64.0;
+        final Offset bikeCenter = Offset(canvasWidth / 2, pointerY + 5.0 + bikeSize / 2);
 
-      // Draw vehicle icon inside circle
-      canvas.save();
-      final clipPath = Path()..addOval(Rect.fromCircle(center: circleCenter, radius: circleRadius - 3.0));
-      canvas.clipPath(clipPath);
+        canvas.save();
+        canvas.drawImageRect(
+          vehicleImage,
+          Rect.fromLTWH(0, 0, vehicleImage.width.toDouble(), vehicleImage.height.toDouble()),
+          Rect.fromCenter(center: bikeCenter, width: bikeSize, height: bikeSize),
+          Paint(),
+        );
+        canvas.restore();
+      } else {
+        final double vehicleY = pointerY + 5.0;
+        final circleRadius = 28.0;
+        final circleCenter = Offset(canvasWidth / 2, vehicleY + circleRadius);
 
-      canvas.drawImageRect(
-        vehicleImage,
-        Rect.fromLTWH(0, 0, vehicleImage.width.toDouble(), vehicleImage.height.toDouble()),
-        Rect.fromCenter(center: circleCenter, width: 38.0, height: 38.0),
-        Paint()..colorFilter = const ColorFilter.mode(Colors.white, BlendMode.srcIn),
-      );
-      canvas.restore();
+        canvas.drawCircle(circleCenter.translate(0, 1.5), circleRadius, shadowPaint);
+        canvas.drawCircle(circleCenter, circleRadius, Paint()..color = AppColor.themeColor..style = PaintingStyle.fill);
+        canvas.drawCircle(circleCenter, circleRadius - 1.5, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 2.5);
+
+        // Draw vehicle icon inside circle
+        canvas.save();
+        final clipPath = Path()..addOval(Rect.fromCircle(center: circleCenter, radius: circleRadius - 3.0));
+        canvas.clipPath(clipPath);
+
+        canvas.drawImageRect(
+          vehicleImage,
+          Rect.fromLTWH(0, 0, vehicleImage.width.toDouble(), vehicleImage.height.toDouble()),
+          Rect.fromCenter(center: circleCenter, width: 38.0, height: 38.0),
+          Paint()..colorFilter = const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+        );
+        canvas.restore();
+      }
 
       final picture = recorder.endRecording();
       final img = await picture.toImage((canvasWidth * dpr).round(), (canvasHeight * dpr).round());
@@ -187,126 +193,147 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
     }
   }
 
-  Future<_RouteInfo> _getDirectionsInfo(LatLng start, LatLng end) async {
-    final String url = "https://maps.googleapis.com/maps/api/directions/json?"
-        "origin=${start.latitude},${start.longitude}&"
-        "destination=${end.latitude},${end.longitude}&"
-        "mode=driving&"
-        "avoid=tolls&"
-        "key=${AppConstant.googleApiKey}";
+  // ── Priority Pickup — booking_price is quoted inclusive of the priority
+  // fee at booking time (a preview), but it's only actually paid if the
+  // pickup was on time. The backend only flips priorityOutcome to
+  // 'priority_charged' at the DELIVERED transition, so while the trip is
+  // still in progress (which is exactly when this tracking screen is shown)
+  // outcome is often still 'pending' even for a pickup that was genuinely on
+  // time. So while pending, fall back to computing on-time-ness directly
+  // from the same timestamps the backend uses — mirrors
+  // FareDisplayHelper.isPriorityChargeCollectible in the driver app.
+  bool _isPriorityChargeCollectible(Map<String, dynamic> data) {
+    final String outcome = data['priorityOutcome']?.toString() ?? 'pending';
+    if (outcome == 'priority_charged') return true;
+    if (outcome != 'pending') return false;
 
-    try {
-      final response = await http.get(Uri.parse(url));
-      if (response.statusCode == 200) {
-        final Map<String, dynamic> data = json.decode(response.body);
-        if (data['status'] == 'OK') {
-          final String encodedPolyline =
-              data['routes'][0]['overview_polyline']['points'];
-          final List<LatLng> decodedPoints = _decodePolyline(encodedPolyline);
-          
-          final String durationText = data['routes'][0]['legs'][0]['duration']['text'] ?? '';
-          final String distanceText = data['routes'][0]['legs'][0]['distance']['text'] ?? '';
-          
-          return _RouteInfo(
-            points: decodedPoints,
-            durationText: durationText,
-            distanceText: distanceText,
-          );
-        }
-      }
-    } catch (e) {
-      debugPrint("Error fetching directions: $e");
-    }
+    final DateTime? pickupVerifiedAt = DateTime.tryParse(data['pickupGeofenceVerifiedAt']?.toString() ?? '');
+    final DateTime? acceptedAt = DateTime.tryParse((data['driverAcceptedAt'] ?? data['accepted_at'])?.toString() ?? '');
+    if (pickupVerifiedAt == null || acceptedAt == null) return false;
 
-    return _RouteInfo(points: [start, end]);
+    final int limitSeconds = int.tryParse(data['priorityArrivalTimeLimitSeconds']?.toString() ?? '') ?? 600;
+    return pickupVerifiedAt.difference(acceptedAt).inSeconds <= limitSeconds;
   }
 
-  // Cost optimisation: reuse the last-fetched route/info for a given leg
-  // ("pickup_to_drop" or "driver_to_target") instead of always calling
-  // Directions, subject to the caller-supplied `shouldRefresh` gate.
-  Future<_RouteInfo> _getCachedDirectionsInfo({
-    required String key,
-    required LatLng start,
-    required LatLng end,
-    required bool shouldRefresh,
-  }) async {
-    if (!shouldRefresh && _routeInfoCache.containsKey(key)) {
-      return _routeInfoCache[key]!;
-    }
+  // Same GST-waived presentation used on the delivered-trip receipt
+  // (delivered_booking_detail_screen.dart) — GST is computed for display
+  // then struck through and marked Free, since the retailer isn't charged it.
+  Widget _buildFareCard(Map<String, dynamic> data) {
+    final String rawPrice = (data['booking_price'] ?? data['price'] ?? '0').toString().replaceAll('₹', '').trim();
+    final double quotedTotal = double.tryParse(rawPrice) ?? 0.0;
 
-    final info = await _getDirectionsInfo(start, end);
-    _routeInfoCache[key] = info;
-    _routeCache[key] = info.points;
-    _routeStartCache[key] = start;
-    _routeEndCache[key] = end;
-    _routeFetchedAt[key] = DateTime.now();
-    return info;
-  }
+    final bool isPriority = data['isPriorityPickup'] == true;
+    final double priorityFeeAmount = double.tryParse(data['priorityChargeAmount']?.toString() ?? '') ?? 0.0;
+    final bool priorityCollected = isPriority && _isPriorityChargeCollectible(data);
+    final double tripFare = isPriority ? (quotedTotal - priorityFeeAmount) : quotedTotal;
+    final double amountToPay = tripFare + (priorityCollected ? priorityFeeAmount : 0);
+    final double gst = double.parse((amountToPay * 0.18).toStringAsFixed(2));
 
-  // Pickup→drop is a fixed reference route for the whole booking: refetch
-  // only on the very first fetch, or if the pickup/drop points themselves
-  // changed (e.g. address correction) — no time-based expiry needed.
-  bool _shouldRefreshPickupToDrop(LatLng pickup, LatLng drop) {
-    const key = 'pickup_to_drop';
-    if (!_routeInfoCache.containsKey(key)) return true;
-    final prevStart = _routeStartCache[key];
-    final prevEnd = _routeEndCache[key];
-    if (prevStart == null || prevEnd == null) return true;
-    return prevStart != pickup || prevEnd != drop;
-  }
-
-  // Driver→target is the live leg: only refresh once the driver has moved
-  // ≥150m AND ≥60s have passed since the last fetch for this leg (same
-  // pattern as Drivers_app/lib/helper/MapImage_screen.dart's
-  // _getCachedRoute). Always refresh if the target itself switched
-  // (pickup → drop) or this is the first fetch.
-  bool _shouldRefreshDriverToTarget(LatLng driverLatLng, LatLng target) {
-    const key = 'driver_to_target';
-    if (!_routeInfoCache.containsKey(key)) return true;
-    final prevStart = _routeStartCache[key];
-    final prevEnd = _routeEndCache[key];
-    final prevTime = _routeFetchedAt[key];
-    if (prevStart == null || prevEnd == null || prevTime == null) return true;
-    if (prevEnd != target) return true;
-
-    final movedMeters = Geolocator.distanceBetween(
-      prevStart.latitude,
-      prevStart.longitude,
-      driverLatLng.latitude,
-      driverLatLng.longitude,
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFECEFF3)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.receipt_long_rounded, size: 17, color: AppColor.themeColor),
+              const SizedBox(width: 8),
+              const Text(
+                'Fare Details',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF0F172A), fontFamily: AppFont.fontFamily),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Trip Fare', style: TextStyle(fontSize: 13, color: Colors.black87, fontFamily: AppFont.fontFamily)),
+              Text('₹ ${tripFare.toStringAsFixed(2)}', style: const TextStyle(fontSize: 13, color: Colors.black87, fontFamily: AppFont.fontFamily)),
+            ],
+          ),
+          if (isPriority) ...[
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Priority Pickup Fee', style: TextStyle(fontSize: 13, color: Colors.black87, fontFamily: AppFont.fontFamily)),
+                Row(
+                  children: [
+                    Text(
+                      '₹ ${priorityFeeAmount.toStringAsFixed(2)}',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: priorityCollected ? Colors.black87 : Colors.grey.shade500,
+                        decoration: priorityCollected ? null : TextDecoration.lineThrough,
+                        fontFamily: AppFont.fontFamily,
+                      ),
+                    ),
+                    if (!priorityCollected) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        'Not Charged',
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontWeight: FontWeight.bold, fontFamily: AppFont.fontFamily),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('GST Charges (18%)', style: TextStyle(fontSize: 13, color: Colors.black87, fontFamily: AppFont.fontFamily)),
+              Row(
+                children: [
+                  Text(
+                    '₹ ${gst.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade500,
+                      decoration: TextDecoration.lineThrough,
+                      fontFamily: AppFont.fontFamily,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Free',
+                    style: TextStyle(fontSize: 13, color: Colors.green.shade600, fontWeight: FontWeight.bold, fontFamily: AppFont.fontFamily),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          const Divider(height: 1, color: Color(0xFFEEEEEE)),
+          const SizedBox(height: 14),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Amount to Pay',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF0F172A), fontFamily: AppFont.fontFamily),
+              ),
+              Text(
+                '₹ ${amountToPay.toStringAsFixed(0)}',
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColor.themeColor, fontFamily: AppFont.fontFamily),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
-    final elapsedSeconds = DateTime.now().difference(prevTime).inSeconds;
-    return movedMeters >= 150 || elapsedSeconds >= 60;
-  }
-
-  List<LatLng> _decodePolyline(String encoded) {
-    List<LatLng> polyline = [];
-    int index = 0, len = encoded.length;
-    int lat = 0, lng = 0;
-
-    while (index < len) {
-      int b, shift = 0, result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
-      lat += dlat;
-
-      shift = 0;
-      result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
-      lng += dlng;
-
-      polyline.add(LatLng(lat / 1E5, lng / 1E5));
-    }
-    return polyline;
   }
 
   Widget _buildTimelineCard(Map<String, dynamic> data, dynamic pickup, dynamic drop, Size size) {
@@ -316,6 +343,12 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
     final receiverPhone = (data['receiver_phone'] ?? '').toString().trim();
     final pickupAddress = (pickup?['address'] ?? '').toString().trim();
     final dropAddress = (drop?['address'] ?? '').toString().trim();
+    final bookingId = (data['_id'] ?? '').toString();
+    // Pickup can only still be moved before the driver reaches it — matches
+    // the same rule/backend enforcement as the other Edit Location entry
+    // points (see edit_booking_location_screen.dart doc comment).
+    final normalizedStatus = (data['booking_status'] ?? '').toString().toLowerCase().replaceAll(' ', '');
+    final bool canEditPickup = normalizedStatus == 'accepted';
     // extra_drops includes the final drop as its last entry — only the earlier
     // entries are intermediate stops (dropAddress above already covers the last one).
     final List<dynamic> _allExtraDrops = data['extra_drops'] is List ? data['extra_drops'] as List : [];
@@ -328,6 +361,7 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFECEFF3)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.03),
@@ -339,19 +373,66 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (bookingId.isNotEmpty) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Trip Details',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                    fontFamily: AppFont.fontFamily,
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () {
+                    Get.to(() => EditBookingLocationScreen(
+                          bookingId: bookingId,
+                          canEditPickup: canEditPickup,
+                          currentPickupAddress: canEditPickup ? pickupAddress : '',
+                          currentDropAddress: dropAddress,
+                          currentStops: canEditPickup
+                              ? intermediateStops.whereType<Map>().map((s) => Map<String, dynamic>.from(s)).toList()
+                              : const [],
+                        ));
+                  },
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.edit_location_alt_outlined, size: 15, color: AppColor.themeColor),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Edit',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: AppFont.fontFamily,
+                          color: AppColor.themeColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Left Timeline vertical indicators
               Column(
                 children: [
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 5),
                   Container(
-                    width: 10,
-                    height: 10,
-                    decoration: const BoxDecoration(
-                      color: Colors.green,
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
                       shape: BoxShape.circle,
+                      border: Border.all(color: AppColor.themeColor, width: 3),
                     ),
                   ),
                   Container(
@@ -361,14 +442,7 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
                       color: Colors.grey.shade300,
                     ),
                   ),
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: const BoxDecoration(
-                      color: Colors.red,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
+                  const Icon(Icons.location_on, size: 16, color: Color(0xFFEF4444)),
                 ],
               ),
               const SizedBox(width: 14),
@@ -460,13 +534,6 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
   Timer? _locationTimer;
   LatLng? _lastFittedDriverLocation;
   bool _hasClearedCompletedBanner = false;
-  final Map<String, List<LatLng>> _routeCache = {};
-  final Map<String, _RouteInfo> _routeInfoCache = {};
-  final Map<String, LatLng> _routeStartCache = {};
-  final Map<String, LatLng> _routeEndCache = {};
-  final Map<String, DateTime> _routeFetchedAt = {};
-  String _etaText = '';
-  String _etaDistanceText = '';
   String _trackingPhaseText = 'Waiting for driver location';
 
 
@@ -554,7 +621,7 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
       // Also refresh booking data to get latest driver assignment + status
       if (mounted) {
         Provider.of<BookingDetailController>(context, listen: false)
-            .getBookingDetail(context, bookingId: widget.bookingId);
+            .getBookingDetail(context, bookingId: widget.bookingId, silent: true);
       }
     }
 
@@ -589,6 +656,21 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
     final Set<Marker> markers = {};
     final Set<Polyline> polylines = {};
 
+    String vehicleName = '';
+    try {
+      final controller = Provider.of<BookingDetailController>(context, listen: false);
+      final data = controller.bookingDetail;
+      final vehicle = data?['vehicleType_id'];
+      final subVehicle = data?['subVehicleType_id'];
+      vehicleName = ((subVehicle is Map ? subVehicle['name'] : null) ??
+                     (vehicle is Map ? vehicle['name'] : null) ??
+                     data?['display_vehicle_name'] ??
+                     data?['requested_vehicle_name'] ??
+                     '').toString().toLowerCase();
+    } catch (e) {
+      debugPrint("Error parsing vehicleName: $e");
+    }
+
     if (pickupLatLng != null) {
       markers.add(Marker(
         markerId: const MarkerId("banner_pickup"),
@@ -619,32 +701,24 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
         status == 'cancelled' ||
         status == 'rejected';
 
-    // Grey reference route: pickup → drop.
+    // Grey reference route: pickup → drop — straight line, no Directions API
+    // call. Removed per cost decision (2026-09-05); previously called Google
+    // Directions once per booking (cached after that), which was a smaller
+    // but still nonzero cost across every booking ever tracked.
     if (pickupLatLng != null && dropLatLng != null) {
-      final routeInfo = await _getCachedDirectionsInfo(
-        key: 'pickup_to_drop',
-        start: pickupLatLng,
-        end: dropLatLng,
-        shouldRefresh: _shouldRefreshPickupToDrop(pickupLatLng, dropLatLng),
+      polylines.add(
+        Polyline(
+          polylineId: const PolylineId('banner_pickup_drop'),
+          points: [pickupLatLng, dropLatLng],
+          color: Colors.grey.shade500,
+          width: 4,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+        ),
       );
-      final routePoints = routeInfo.points;
-      if (routePoints.length >= 2) {
-        polylines.add(
-          Polyline(
-            polylineId: const PolylineId('banner_pickup_drop'),
-            points: routePoints,
-            color: Colors.grey.shade500,
-            width: 4,
-            startCap: Cap.roundCap,
-            endCap: Cap.roundCap,
-            jointType: JointType.round,
-          ),
-        );
-      }
     }
 
-    String nextEta = '';
-    String nextDistance = '';
     String nextPhase = isCompleted
         ? 'Delivery completed'
         : (driverLatLng == null
@@ -659,20 +733,16 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
           ? (dropLatLng ?? pickupLatLng)
           : (pickupLatLng ?? dropLatLng);
 
+      // Straight line only — no Directions API call here. This used to fetch
+      // a routed polyline + ETA/distance every ~60s while the driver moved,
+      // which billed Google Directions on every active delivery being
+      // watched. Removed per cost decision (2026-09-05); a straight line
+      // still shows direction of travel on the map without any API cost.
       if (activeTarget != null) {
-        final routeInfo = await _getCachedDirectionsInfo(
-          key: 'driver_to_target',
-          start: driverLatLng,
-          end: activeTarget,
-          shouldRefresh: _shouldRefreshDriverToTarget(driverLatLng, activeTarget),
-        );
-        final routePoints = routeInfo.points;
-        nextEta = routeInfo.durationText;
-        nextDistance = routeInfo.distanceText;
         polylines.add(
           Polyline(
             polylineId: const PolylineId('banner_driver_active'),
-            points: routePoints.length >= 2 ? routePoints : [driverLatLng, activeTarget],
+            points: [driverLatLng, activeTarget],
             color: const Color(0xFF4285F4),
             width: 6,
             startCap: Cap.roundCap,
@@ -686,16 +756,22 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
     // Now construct the driver marker with the calculated nextEta!
     if (driverLatLng != null) {
       ui.Image? vehicleImg = _scooterImage;
-      if (bookingStatus != null) {
-        final statusLower = bookingStatus.toLowerCase();
-        if (statusLower.contains("mini")) {
-          vehicleImg = _miniTruckImage;
-        } else if (!statusLower.contains("2 wheeler") && !statusLower.contains("bike") && !statusLower.contains("scooter")) {
-          vehicleImg = _largeTruckImage;
-        }
+      if (vehicleName.contains("mini") ||
+          vehicleName.contains("loader") ||
+          vehicleName.contains("tata") ||
+          vehicleName.contains("ace") ||
+          vehicleName.contains("diesel") ||
+          vehicleName.contains("3 wheeler") ||
+          vehicleName.contains("three")) {
+        vehicleImg = _miniTruckImage;
+      } else if (!vehicleName.contains("2 wheeler") &&
+                 !vehicleName.contains("bike") &&
+                 !vehicleName.contains("scooter") &&
+                 vehicleName.isNotEmpty) {
+        vehicleImg = _largeTruckImage;
       }
 
-      final markerIcon = await _generateMarkerIcon(nextEta.isNotEmpty ? nextEta : "Live", vehicleImg);
+      final markerIcon = await _generateMarkerIcon("Live", vehicleImg);
 
       markers.add(Marker(
         markerId: const MarkerId("banner_driver"),
@@ -710,8 +786,6 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
       setState(() {
         _bannerMarkers = markers;
         _bannerPolylines = polylines;
-        _etaText = nextEta;
-        _etaDistanceText = nextDistance;
         _trackingPhaseText = nextPhase;
       });
     }
@@ -783,8 +857,8 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
     final data = controller.bookingDetail;
     final pickup = data?['pickup_location'];
     final drop = data?['dropoff_location'];
-    final vehicle = data?['vehicle_type'];
-    final subVehicle = data?['sub_vehicle_type'];
+    final vehicle = data?['vehicleType_id'];
+    final subVehicle = data?['subVehicleType_id'];
 
     final dynamic dropLatRaw = drop?['latitude'] ?? pickup?['latitude'];
     final dynamic dropLngRaw = drop?['longitude'] ?? pickup?['longitude'];
@@ -797,8 +871,12 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
           userId: userId,
           driverId: '',
           bookingId: widget.bookingId,
-          vehicleName:
-              (subVehicle?['name'] ?? vehicle?['name'] ?? '').toString(),
+          vehicleName: (subVehicle?['name'] ??
+                  vehicle?['name'] ??
+                  data?['display_vehicle_name'] ??
+                  data?['requested_vehicle_name'] ??
+                  '')
+              .toString(),
           vehicleImage:
               (subVehicle?['image'] ?? vehicle?['image'] ?? '').toString(),
           targetLat: targetLat,
@@ -872,13 +950,37 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
 
             final data = controller.bookingDetail;
             if (data == null) {
-              return const Center(
-                child: Text('Booking not found.',
-                    style: TextStyle(color: Colors.grey)),
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        controller.errorMessage ?? 'Booking not found.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontFamily: AppFont.fontFamily,
+                          color: Colors.grey,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: controller.isReassigned
+                            ? () => _handleBack()
+                            : () => _refreshBooking(),
+                        child: Text(
+                          controller.isReassigned ? 'Go back' : 'Retry',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               );
             }
-            final vehicle = data['vehicle_type'];
-            final subVehicle = data['sub_vehicle_type'];
+            final vehicle = data['vehicleType_id'];
+            final subVehicle = data['subVehicleType_id'];
             final size = MediaQuery.of(context).size;
 
             final String bookingStatus =
@@ -903,9 +1005,9 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
             if (data['scratch_card_pending'] == true &&
                 !_hasShownScratch &&
                 scratchCoins > 0) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted && !_hasShownScratch) {
-                  _hasShownScratch = true;
+              _hasShownScratch = true;
+              Future.delayed(const Duration(milliseconds: 2500), () {
+                if (mounted) {
                   CoinScratchCardScreen.showIfNeeded(context,
                       bookingId: widget.bookingId, coins: scratchCoins);
                 }
@@ -1030,49 +1132,53 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
               backgroundColor: const Color(0xFFF8FAFC),
               body: Column(
                 children: [
-                  CommonAppBar(
-                    title: bookingCode.isNotEmpty ? 'Trip $bookingCode' : 'Trip Details',
-                    onBack: _handleBack,
-                  ),
+                  _buildTrackingHeader(bookingCode, statusLabel, statusColor),
                   Expanded(
                     child: SingleChildScrollView(
                       physics: const BouncingScrollPhysics(),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // ── Map Card Container ──
+                          // ── Map Card Container — framed like it's inset into the page ──
                           Container(
-                            height: MediaQuery.of(context).size.height * 0.45,
-                            margin: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                            height: MediaQuery.of(context).size.height * 0.42,
+                            margin: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                            padding: const EdgeInsets.all(5),
                             decoration: BoxDecoration(
                               color: Colors.white,
-                              borderRadius: BorderRadius.circular(16),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: const Color(0xFFE2E8F0), width: 1),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.black.withOpacity(0.06),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 4),
+                                  color: Colors.black.withOpacity(0.08),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 6),
+                                ),
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.03),
+                                  blurRadius: 2,
+                                  offset: const Offset(0, 1),
                                 ),
                               ],
                             ),
                             child: ClipRRect(
-                              borderRadius: BorderRadius.circular(16),
-                              child: _buildLiveMapBanner(initialTarget),
-                            ),
-                          ),
-
-                          // ── Status Text ──
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            child: Center(
-                              child: Text(
-                                _trackingStatusLabel(bookingStatus),
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF1E293B),
-                                  fontFamily: AppFont.fontFamily,
-                                ),
+                              borderRadius: BorderRadius.circular(15),
+                              child: Stack(
+                                children: [
+                                  _buildLiveMapBanner(initialTarget),
+                                  // Inner hairline so the live map reads as embedded,
+                                  // not just a plain rectangle sitting on the page.
+                                  Positioned.fill(
+                                    child: IgnorePointer(
+                                      child: DecoratedBox(
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(15),
+                                          border: Border.all(color: Colors.black.withOpacity(0.08), width: 1.2),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
@@ -1080,10 +1186,11 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
                           // ── Driver Details Card ──
                           Container(
                             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                            padding: const EdgeInsets.all(16),
+                            padding: const EdgeInsets.all(14),
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: const Color(0xFFECEFF3)),
                               boxShadow: [
                                 BoxShadow(
                                   color: Colors.black.withOpacity(0.03),
@@ -1094,34 +1201,65 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
                             ),
                             child: Row(
                               children: [
-                                _buildDriverAvatar(driverPhoto, driverName),
+                                Container(
+                                  padding: const EdgeInsets.all(2),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: statusColor, width: 2),
+                                  ),
+                                  child: _buildDriverAvatar(driverPhoto, driverName),
+                                ),
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        vehicleNumber.isNotEmpty ? vehicleNumber : 'MP-00-XX-0000',
+                                        driverName.isNotEmpty ? driverName : 'Assigning driver...',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
-                                          fontSize: 16,
+                                          fontSize: 15,
                                           fontWeight: FontWeight.w700,
-                                          color: Colors.black87,
+                                          color: Color(0xFF0F172A),
                                           fontFamily: AppFont.fontFamily,
                                         ),
                                       ),
-                                      const SizedBox(height: 2),
+                                      const SizedBox(height: 4),
                                       Text(
-                                        '${subVehicle?['name'] ?? vehicle?['name'] ?? 'Scooter'} • ${driverName.isNotEmpty ? driverName : 'Assigning driver...'}',
+                                        '${data['requested_vehicle_name'] ?? data['display_vehicle_name'] ?? subVehicle?['name'] ?? vehicle?['name'] ?? 'Vehicle'}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
-                                          fontSize: 13,
+                                          fontSize: 12.5,
                                           color: Colors.grey.shade600,
                                           fontFamily: AppFont.fontFamily,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFF1F5F9),
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: const Color(0xFFE2E8F0)),
+                                        ),
+                                        child: Text(
+                                          vehicleNumber.isNotEmpty ? vehicleNumber : 'MP-00-XX-0000',
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            letterSpacing: 0.4,
+                                            color: Color(0xFF334155),
+                                            fontFamily: AppFont.fontFamily,
+                                          ),
                                         ),
                                       ),
                                     ],
                                   ),
                                 ),
-                                if (driverPhone.isNotEmpty)
+                                if (driverPhone.isNotEmpty) ...[
+                                  const SizedBox(width: 8),
                                   GestureDetector(
                                     onTap: () async {
                                       final uri = Uri(scheme: 'tel', path: driverPhone);
@@ -1130,24 +1268,25 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
                                       } catch (_) {}
                                     },
                                     child: Container(
-                                      padding: const EdgeInsets.all(10),
-                                      decoration: BoxDecoration(
+                                      padding: const EdgeInsets.all(11),
+                                      decoration: const BoxDecoration(
+                                        color: AppColor.themeColor,
                                         shape: BoxShape.circle,
-                                        border: Border.all(color: AppColor.themeColor, width: 1.5),
                                       ),
                                       child: const Icon(
                                         Icons.call_rounded,
-                                        color: AppColor.themeColor,
-                                        size: 20,
+                                        color: Colors.white,
+                                        size: 19,
                                       ),
                                     ),
                                   ),
+                                ],
                               ],
                             ),
                           ),
 
-                          // ── Pickup & Drop Address Details Card (Timeline style) ──
-                          _buildTimelineCard(data, pickup, drop, size),
+                          // ── Fare Details Card ──
+                          _buildFareCard(data),
 
                           // ── Ride Start OTP (PIN) Card ──
                           if (showOtp) ...[
@@ -1232,6 +1371,9 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
                             ),
                           ],
 
+                          // ── Pickup & Drop Address Details Card (Timeline style) ──
+                          _buildTimelineCard(data, pickup, drop, size),
+
                           // ── Cancel Link/Button ──
                           if (canCancel) ...[
                             const SizedBox(height: 12),
@@ -1265,6 +1407,113 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
                 ],
               )            );
           },
+        ),
+      ),
+    );
+  }
+
+  // Custom header for this screen — carries the live status as a coloured
+  // chip next to the trip code instead of a separate centred status line,
+  // so the two pieces of information a customer glances at first (which
+  // trip, what stage) sit together in one place.
+  Widget _buildTrackingHeader(String bookingCode, String statusLabel, Color statusColor) {
+    return SafeArea(
+      bottom: false,
+      child: Container(
+        color: Colors.white,
+        padding: const EdgeInsets.fromLTRB(8, 6, 16, 12),
+        child: Row(
+          children: [
+            InkWell(
+              borderRadius: BorderRadius.circular(20),
+              onTap: _handleBack,
+              child: const Padding(
+                padding: EdgeInsets.all(8),
+                child: Icon(Icons.arrow_back_rounded, color: Color(0xFF0F172A), size: 22),
+              ),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    bookingCode.isNotEmpty ? 'Trip $bookingCode' : 'Trip Details',
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF0F172A),
+                      fontFamily: AppFont.fontFamily,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: statusColor.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    statusLabel,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: statusColor,
+                      fontFamily: AppFont.fontFamily,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Same always-visible "Help" pill as the driver app's active-ride
+            // header — previously the only way to reach Help & Support here
+            // was buried inside the Cancel Booking popup, which disappears
+            // once the booking passes the cancellable window.
+            InkWell(
+              borderRadius: BorderRadius.circular(30),
+              onTap: () {
+                Get.to(() => bookingHelpAndSupport(
+                      bookingId: widget.bookingId,
+                      bookingCode: bookingCode,
+                    ));
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade600,
+                  borderRadius: BorderRadius.circular(30),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.support_agent, color: Colors.white, size: 20),
+                    SizedBox(width: 6),
+                    Text(
+                      'Help',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        fontFamily: AppFont.fontFamily,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -1432,6 +1681,25 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
               mapType: MapType.normal,
               onMapCreated: (ctrl) {
                 _mapController = ctrl;
+                // Custom style to hide distracting landmarks and business POIs
+                ctrl.setMapStyle('''
+                  [
+                    {
+                      "featureType": "poi",
+                      "elementType": "all",
+                      "stylers": [
+                        { "visibility": "off" }
+                      ]
+                    },
+                    {
+                      "featureType": "transit",
+                      "elementType": "all",
+                      "stylers": [
+                        { "visibility": "off" }
+                      ]
+                    }
+                  ]
+                ''');
                 if (!_mapCompleter.isCompleted) {
                   _mapCompleter.complete(ctrl);
                 }
@@ -1441,7 +1709,12 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
             ),
           ),
 
-          // ── ETA Banner (Top-Left) ──
+          // ── Tracking Phase Banner (Top-Left) ──
+          // No ETA/distance text here anymore — that came from a Google
+          // Directions API call refreshed every ~60s per active delivery,
+          // which billed on every booking anyone had open. Removed per cost
+          // decision (2026-09-05); this phase label is derived locally from
+          // booking status, no API call involved.
           if (driverLatLng != null && isActiveBooking)
             Positioned(
               top: 14,
@@ -1459,31 +1732,14 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
                     ),
                   ],
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      _etaText.isNotEmpty
-                          ? "ETA: $_etaText${_etaDistanceText.isNotEmpty ? ' • $_etaDistanceText' : ''}"
-                          : "Locating driver…",
-                      style: const TextStyle(
-                        fontFamily: AppFont.fontFamily,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13,
-                        color: AppColor.blackColor,
-                      ),
-                    ),
-                    Text(
-                      _trackingPhaseText,
-                      style: TextStyle(
-                        fontFamily: AppFont.fontFamily,
-                        fontWeight: FontWeight.w500,
-                        fontSize: 11,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
+                child: Text(
+                  _trackingPhaseText,
+                  style: const TextStyle(
+                    fontFamily: AppFont.fontFamily,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    color: AppColor.blackColor,
+                  ),
                 ),
               ),
             ),
@@ -1621,8 +1877,9 @@ class _BookingDetailScreenState extends State<BookingDetailScreen> {
                       userId: userId,
                       bookingId: widget.bookingId,
                     );
-                    // Refresh booking data from API
-                    await bookingCtrl.getBookingDetail(context, bookingId: widget.bookingId);
+                    // Refresh booking data from API without flashing the
+                    // full-screen shimmer over the map/tracking view.
+                    await bookingCtrl.getBookingDetail(context, bookingId: widget.bookingId, silent: true);
                     // Rebuild markers with latest data
                     if (mounted) {
                       final data = bookingCtrl.bookingDetail;

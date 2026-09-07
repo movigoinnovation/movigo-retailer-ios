@@ -41,7 +41,7 @@ Movigo — local delivery made simpler, smarter, and more transparent.''';
 
   static const String termsAndConditions = r'''MOVIGO TERMS AND CONDITIONS
 
-Effective Date: May 13, 2026
+Effective Date: August 20, 2026
 
 These Terms and Conditions govern access to and use of the Movigo mobile applications, website, services, and related platform features operated by Movigo Innovations Pvt. Ltd. (“Movigo”, “we”, “us”, “our”). By registering on, accessing, or using the Movigo platform, you agree to these Terms.
 
@@ -72,7 +72,7 @@ Final delivery fare is shown before booking confirmation and may depend on dista
 
 6. Driver Registration Fee and Wallet
 
-Driver registration or onboarding fees may be collected after document approval. Driver wallet entries may be maintained for internal operational records, platform fee deduction, credits, debits, and transaction history. Driver wallet is not withdrawable through the app unless explicitly enabled by Movigo in writing.
+Driver registration or onboarding fees may be collected after document approval. Movigo may run limited-time free-registration or trial-ride promotions for eligible driver categories, with terms shown in the app at the time of the offer. Driver wallet entries may be maintained for internal operational records, platform fee deduction, credits, debits, and transaction history. Driver wallet is not withdrawable through the app unless explicitly enabled by Movigo in writing. Movigo sets a minimum wallet balance threshold; if a driver's wallet balance falls below this threshold (including going negative from platform fee or commission deductions), the driver's ability to accept new bookings may be temporarily restricted until the balance is topped up above the threshold.
 
 7. Cancellation and Refunds
 
@@ -182,6 +182,8 @@ Movigo does not own transportation fleets and does not directly provide transpor
 4. Location Data Usage
 
 Location data may be collected in real-time during active bookings and may continue briefly after ride completion for safety, fraud prevention, and dispute resolution.
+
+Background location access, where enabled, is used only for active delivery operations, live tracking, fraud prevention, safety, and operational reliability.
 
 ━━━━━━━━━━━━━━━
 

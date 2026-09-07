@@ -1,7 +1,7 @@
 name: movigo
 description: "Movigo Customer App"
 publish_to: "none"
-version: 1.3.1+49
+version: 1.3.2+56
 
 environment:
   sdk: ">=3.3.1 <4.0.0"
@@ -29,7 +29,7 @@ dependencies:
   path_provider: ^2.1.4
   provider: ^6.1.1
   intl: ^0.20.2
-  carousel_slider: ^4.0.0
+  carousel_slider: ^5.0.0
   loading_animation_widget: ^1.2.1
   readmore: ^2.2.0
   url_launcher: ^6.3.2
@@ -44,14 +44,17 @@ dependencies:
   flutter_contacts: ^1.1.9+2   # contacts picker for receiver/sender fields
   pdf: ^3.11.1
   printing: ^5.13.2
-  cloud_firestore: ^5.0.0
-  firebase_messaging: ^15.1.0
-  firebase_core: ^3.15.0
+  cloud_firestore: ^6.8.0
+  firebase_messaging: ^16.5.0
+  firebase_core: ^4.13.0
   flutter_local_notifications: ^17.2.4
-  firebase_database: ^11.1.1
-  firebase_crashlytics: ^4.1.3
+  firebase_database: ^12.4.7
+  firebase_crashlytics: ^5.2.7
   keep_screen_on: ^4.0.0
   video_player: ^2.11.1
+  in_app_update: ^4.2.3
+  font_awesome_flutter: ^10.8.0
+  package_info_plus: ^8.1.2
 
 
 dev_dependencies:
@@ -73,6 +76,9 @@ dependency_overrides:
 flutter:
   uses-material-design: true
 
+  # cloud_firestore is CocoaPods-only while firebase_core defaults to Swift
+  # Package Manager under newer Flutter, which breaks `pod install` during
+  # `flutter build ipa` on Codemagic. Keep SPM off for the iOS release.
   config:
     enable-swift-package-manager: false
 

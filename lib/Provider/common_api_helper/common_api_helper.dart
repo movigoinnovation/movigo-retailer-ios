@@ -84,19 +84,26 @@ Map<String, dynamic>? _handleStatusCode(
   }
 
   if (statusCode == 401 || statusCode == 403) {
-    // A guest (no token yet) hitting an account-gated endpoint isn't a
-    // "session expired" — there was never a session to expire. Let the
-    // calling provider's own empty/error fallback handle it quietly
-    // instead of yanking a browsing guest back to the login screen.
-    if (AppConstant.token.isEmpty) {
-      return null;
+    // Only force logout if the server explicitly says to (force_logout flag)
+    // or if the account has been deactivated (active_flag=0). A plain 401/403
+    // can also mean "you're not allowed to see THIS resource" (e.g. a booking
+    // that was reassigned/cancelled while the app was backgrounded) rather
+    // than "your session is dead" — redirecting to login for that case logs
+    // the retailer out for no reason and loses the actual error.
+    final bool isForceLogout = body['force_logout'] == true;
+    final bool deactivated = body['active_flag'] == 0;
+    if (isForceLogout || deactivated) {
+      if (context != null) {
+        _redirectToLogin(context, errorMessage, clearCache: isForceLogout);
+      }
+    } else if (context != null) {
+      SnackBarToastMessage.showSnackBar(context, errorMessage);
     }
-    if (context != null) {
-      // force_logout = true means another device logged in → wipe local session
-      // Regular 401 (transient/race-condition) → redirect but keep cache so next app-start works
-      final bool isForceLogout = body['force_logout'] == true;
-      _redirectToLogin(context, errorMessage, clearCache: isForceLogout);
-    }
+    // A few endpoints attach a machine-readable `code` to a 401/403 for a
+    // reason other than session death (e.g. BOOKING_NOT_ASSIGNED when a
+    // booking was reassigned) — hand that back to the caller instead of
+    // swallowing it, so the screen can show a specific message.
+    if (body['code'] != null) return body;
     return null;
   }
   if (statusCode == 423) {
