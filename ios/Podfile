@@ -43,9 +43,6 @@ post_install do |installer|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
       config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
       config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
-      if ['firebase_database', 'firebase_messaging'].include?(target.name)
-        config.build_settings['DEFINES_MODULE'] = 'NO'
-      end
     end
   end
 
