@@ -84,6 +84,13 @@ Map<String, dynamic>? _handleStatusCode(
   }
 
   if (statusCode == 401 || statusCode == 403) {
+    // A guest (no token yet, via "Continue as Guest") hitting an
+    // account-gated endpoint isn't a dead session — there was never one.
+    // Return quietly and let the calling screen's own empty-state handle
+    // it, instead of flashing an "unauthorized" toast on every guest call.
+    if (AppConstant.token.isEmpty) {
+      return null;
+    }
     // Only force logout if the server explicitly says to (force_logout flag)
     // or if the account has been deactivated (active_flag=0). A plain 401/403
     // can also mean "you're not allowed to see THIS resource" (e.g. a booking

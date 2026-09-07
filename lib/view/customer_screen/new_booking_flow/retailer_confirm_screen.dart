@@ -26,6 +26,7 @@ import 'package:movigo/view/customer_screen/create_booking_screen/booking_detail
 import 'package:movigo/view/customer_screen/create_booking_screen/cancel_ride_screen.dart';
 import 'package:movigo/view/customer_screen/create_booking_screen/finding_driver_screen.dart';
 import 'package:movigo/view/customer_screen/new_booking_flow/route_vehicle_screen.dart';
+import 'package:movigo/view/customer_screen/onboarding/login_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RetailerConfirmScreen  — Version 1
@@ -403,6 +404,15 @@ class _RetailerConfirmScreenState extends State<RetailerConfirmScreen> {
 
   Future<void> _confirmBooking() async {
     if (_isBooking) return;
+    // Guests can browse and price a booking without an account, but placing
+    // one is an account action (billed to a business wallet). Send them to
+    // log in first — App Store Guideline 5.1.1(v).
+    if (AppConstant.token.isEmpty) {
+      SnackBarToastMessage.showSnackBar(
+          context, 'Please log in to place a booking');
+      Get.to(() => const LoginScreen(userType: 'Retailer'));
+      return;
+    }
     if (!_validate()) return;
     setState(() => _isBooking = true);
     try {

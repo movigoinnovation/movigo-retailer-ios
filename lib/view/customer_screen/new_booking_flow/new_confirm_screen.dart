@@ -22,6 +22,7 @@ import 'package:movigo/utilities/app_snackbar_toast_message.dart';
 import 'package:movigo/utilities/phone_number_formatter.dart';
 import 'package:movigo/view/customer_screen/create_booking_screen/booking_detail_screen.dart';
 import 'package:movigo/view/customer_screen/create_booking_screen/finding_driver_screen.dart';
+import 'package:movigo/view/customer_screen/onboarding/login_screen.dart';
 // Feature 3: Surge multiplier
 import 'package:movigo/Controller/surge_controller.dart';
 
@@ -185,6 +186,15 @@ class _NewConfirmScreenState extends State<NewConfirmScreen> {
       phone.trim().length == 10 && double.tryParse(phone.trim()) != null;
 
   Future<void> _confirmBooking() async {
+    // Guests can browse and price a booking without an account, but placing
+    // one is an account action (billed to a business wallet). Send them to
+    // log in first — App Store Guideline 5.1.1(v).
+    if (AppConstant.token.isEmpty) {
+      SnackBarToastMessage.showSnackBar(
+          context, 'Please log in to place a booking');
+      Get.to(() => const LoginScreen(userType: 'Retailer'));
+      return;
+    }
     if (_pickupContactName.trim().isEmpty || _dropContactName.trim().isEmpty) {
       SnackBarToastMessage.showSnackBar(
           context, 'Please add a contact name for both pickup and drop');

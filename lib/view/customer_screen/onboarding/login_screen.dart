@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
 import 'package:movigo/Provider/Post_Provider/post_api_provider.dart';
@@ -14,6 +15,7 @@ import 'package:movigo/utilities/app_font.dart';
 import 'package:movigo/utilities/app_image.dart';
 import 'package:movigo/utilities/app_language.dart';
 import 'package:movigo/utilities/app_button.dart';
+import 'package:movigo/utilities/app_footer.dart';
 import 'package:movigo/utilities/app_snackbar_toast_message.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -288,6 +290,32 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                           ],
                         ),
                       ),
+
+                      SizedBox(height: size.height * 0.02),
+
+                      // Guest browsing: look around the app (vehicle types,
+                      // pricing, etc.) without registering. Booking, payment
+                      // and account screens still ask for login when needed.
+                      // Required by App Store Guideline 5.1.1(v).
+                      TextButton(
+                        onPressed: () {
+                          Get.offAll(() => const CustomBottomNav(
+                                userType: UserType.retailer,
+                                initialIndex: 0,
+                              ));
+                        },
+                        child: Text(
+                          'Continue as Guest',
+                          style: const TextStyle(
+                            fontFamily: AppFont.fontFamily,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: AppColor.themeColor,
+                            decoration: TextDecoration.underline,
+                          ),
+                        ),
+                      ),
+
                       // Spacer to make sure content scrolls above bottom highway
                       const SizedBox(height: 240),
                     ],
