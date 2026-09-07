@@ -64,6 +64,4 @@ workflows:
         submit_to_testflight: false
         submit_to_app_store: true
         release_type: AFTER_APPROVAL
-        app_store_version_localizations:
-          - locale: en-US
-            whats_new: "Bug fixes and performance improvements."
+        cancel_previous_submissions: true
