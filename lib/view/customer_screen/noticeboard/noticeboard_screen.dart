@@ -112,7 +112,7 @@ class _NoticeboardScreenState extends State<NoticeboardScreen> {
 }
 
 class _SocialIconButton extends StatelessWidget {
-  final IconData icon;
+  final FaIconData icon;
   final String url;
 
   const _SocialIconButton({required this.icon, required this.url});
@@ -129,7 +129,7 @@ class _SocialIconButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return IconButton(
       onPressed: _open,
-      icon: Icon(icon, color: Colors.white, size: 20),
+      icon: FaIcon(icon, color: Colors.white, size: 20),
       splashRadius: 20,
       padding: const EdgeInsets.symmetric(horizontal: 2),
       constraints: const BoxConstraints(),
@@ -206,7 +206,7 @@ class _NoticeCard extends StatelessWidget {
       return CircleAvatar(
         radius: 20,
         backgroundColor: _accentColor.withOpacity(0.12),
-        child: Icon(_socialIconData(notice.socialIcon), color: _accentColor, size: 20),
+        child: _socialIcon(notice.socialIcon, _accentColor, 20),
       );
     }
     final emoji = notice.icon.isNotEmpty ? notice.icon : _defaultEmoji;
@@ -217,26 +217,28 @@ class _NoticeCard extends StatelessWidget {
     );
   }
 
-  IconData _socialIconData(String key) {
+  // font_awesome_flutter 11 made FaIconData a separate type from IconData, so
+  // brand glyphs must go through FaIcon and the Material fallbacks through Icon.
+  Widget _socialIcon(String key, Color color, double size) {
     switch (key.toLowerCase()) {
       case 'instagram':
-        return FontAwesomeIcons.instagram;
+        return FaIcon(FontAwesomeIcons.instagram, color: color, size: size);
       case 'facebook':
-        return FontAwesomeIcons.facebookF;
+        return FaIcon(FontAwesomeIcons.facebookF, color: color, size: size);
       case 'whatsapp':
-        return FontAwesomeIcons.whatsapp;
+        return FaIcon(FontAwesomeIcons.whatsapp, color: color, size: size);
       case 'youtube':
-        return FontAwesomeIcons.youtube;
+        return FaIcon(FontAwesomeIcons.youtube, color: color, size: size);
       case 'twitter':
-        return FontAwesomeIcons.xTwitter;
+        return FaIcon(FontAwesomeIcons.xTwitter, color: color, size: size);
       case 'linkedin':
-        return FontAwesomeIcons.linkedinIn;
+        return FaIcon(FontAwesomeIcons.linkedinIn, color: color, size: size);
       case 'telegram':
-        return FontAwesomeIcons.telegram;
+        return FaIcon(FontAwesomeIcons.telegram, color: color, size: size);
       case 'website':
-        return Icons.language;
+        return Icon(Icons.language, color: color, size: size);
       default:
-        return Icons.share_outlined;
+        return Icon(Icons.share_outlined, color: color, size: size);
     }
   }
 
