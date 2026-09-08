@@ -1,7 +1,9 @@
 workflows:
   ios-release:
     name: iOS Release (Movigo Retailer)
-    max_build_duration: 60
+    # 60 was tight once the App Store Connect processing poll (up to 30 min)
+    # was added on top of pod install + flutter build ipa + upload.
+    max_build_duration: 90
     instance_type: mac_mini_m2
 
     integrations:
@@ -73,19 +75,41 @@ workflows:
             | python3 -c 'import sys,json; d=json.load(sys.stdin); d=d.get("data",d) if isinstance(d,dict) else d; print(d[0]["id"] if d else "")'
           }
 
+          # Uploading a build does NOT make it queryable via `builds list`
+          # right away — Apple still has to process it server-side (and, for
+          # the first build of a brand-new marketing version like this one,
+          # also create the pre-release version entry itself), which can take
+          # anywhere from under a minute to 20+ minutes. `app-store-connect
+          # publish --max-build-processing-wait` does not reliably block for
+          # this on a plain upload (observed: it returned in ~90s on a build
+          # that took Apple several more minutes to expose), so poll for the
+          # build ID ourselves instead of trusting a single lookup right after
+          # upload — that single-attempt version failed a real, successful
+          # upload just because we asked one beat too early.
+          wait_for_build_id() {
+            local attempts=40 delay=45 id
+            for i in $(seq 1 "$attempts"); do
+              id="$(find_build_id || true)"
+              if [ -n "$id" ]; then echo "$id"; return 0; fi
+              echo "  ...not visible on App Store Connect yet (attempt $i/$attempts), waiting ${delay}s" >&2
+              sleep "$delay"
+            done
+            return 1
+          }
+
           BUILD_ID="$(find_build_id || true)"
           if [ -n "$BUILD_ID" ]; then
             echo "Build $BUILD_NUMBER already on App Store Connect ($BUILD_ID) — skipping upload."
           else
             echo "Uploading build $BUILD_NUMBER ..."
             app-store-connect publish \
-              --path "$(ls build/ios/ipa/*.ipa | head -1)" \
-              --max-build-processing-wait 60
-            BUILD_ID="$(find_build_id || true)"
+              --path "$(ls build/ios/ipa/*.ipa | head -1)"
+            echo "Upload done — waiting for App Store Connect to finish processing it..."
+            BUILD_ID="$(wait_for_build_id || true)"
           fi
 
           if [ -z "$BUILD_ID" ]; then
-            echo "ERROR: could not resolve build id for $VERSION_NAME ($BUILD_NUMBER)" >&2
+            echo "ERROR: build $VERSION_NAME ($BUILD_NUMBER) was uploaded but never became visible via the API within the wait budget. It is NOT lost — check App Store Connect directly and either wait longer or submit it for review manually from there." >&2
             exit 1
           fi
 
