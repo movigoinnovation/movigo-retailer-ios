@@ -32,8 +32,28 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 
   await LocalNotificationService.initialize();
-  // FIX: always show — backend sends notification+data together, handle both
-  {
+
+  // Every non-booking push carries a top-level FCM `notification` block
+  // (see sendPushToOne/sendPushToMany in Backend/src/utils/firebase.js —
+  // only isBooking pushes omit it, deliberately, to get a custom looping
+  // ringtone via a manual local notification instead). On Android, while
+  // the app is backgrounded/terminated, the FCM SDK ITSELF already renders
+  // that notification block to the system tray with zero app code running
+  // — this background handler still fires alongside it purely for
+  // logging/data-sync. Calling showFromRemoteMessage unconditionally here
+  // used to show that same push a second time, via flutter_local_notifications,
+  // for every single backgrounded push (i.e. almost always — foreground is
+  // the rare case). Manually show only when Android *won't* auto-display it
+  // itself: pure data-only messages (message.notification == null), which
+  // today is booking alerts.
+  //
+  // iOS is left untouched here (this condition is always false on iOS) —
+  // APNs' own auto-display behavior for a notification-block push differs
+  // enough from Android's that this needs its own on-device verification
+  // before being extended there.
+  final bool androidAutoDisplays =
+      Platform.isAndroid && message.notification != null;
+  if (!androidAutoDisplays) {
     await LocalNotificationService.showFromRemoteMessage(message);
   }
 }
