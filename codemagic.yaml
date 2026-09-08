@@ -50,16 +50,49 @@ workflows:
           # Codemagic's built-in `publishing.app_store_connect` block has no way
           # to supply "What's New" text, so an App Store version update fails at
           # the review-submission step (409: missing required attribute
-          # 'whatsNew'). Do the upload + submission here instead so --whats-new
-          # can be passed. Credentials come from the workflow-level
-          # `integrations.app_store_connect` (APP_STORE_CONNECT_* env vars).
-          app-store-connect publish \
-            --path "build/ios/ipa/*.ipa" \
-            --app-store \
-            --platform IOS \
-            --release-type AFTER_APPROVAL \
+          # 'whatsNew'). Do it here so --whats-new can be passed.
+          #
+          # Idempotent: if this exact build number is already on App Store
+          # Connect (e.g. a re-run of the same commit), skip the upload instead
+          # of hard-failing on a duplicate CFBundleVersion, and just (re)submit.
+          # Credentials come from the workflow-level `integrations.app_store_connect`
+          # (APP_STORE_CONNECT_* env vars picked up automatically).
+          set -euo pipefail
+
+          VERSION=$(grep '^version:' pubspec.yaml | head -1 | sed 's/version:[[:space:]]*//')
+          VERSION_NAME="${VERSION%%+*}"
+          BUILD_NUMBER="${VERSION##*+}"
+          echo "Target: $VERSION_NAME ($BUILD_NUMBER) for app $APP_STORE_APPLE_ID"
+
+          find_build_id() {
+            app-store-connect builds list \
+              --app-id "$APP_STORE_APPLE_ID" \
+              --pre-release-version "$VERSION_NAME" \
+              --build-version-number "$BUILD_NUMBER" \
+              --json 2>/dev/null \
+            | python3 -c 'import sys,json; d=json.load(sys.stdin); d=d.get("data",d) if isinstance(d,dict) else d; print(d[0]["id"] if d else "")'
+          }
+
+          BUILD_ID="$(find_build_id || true)"
+          if [ -n "$BUILD_ID" ]; then
+            echo "Build $BUILD_NUMBER already on App Store Connect ($BUILD_ID) — skipping upload."
+          else
+            echo "Uploading build $BUILD_NUMBER ..."
+            app-store-connect publish \
+              --path "$(ls build/ios/ipa/*.ipa | head -1)" \
+              --max-build-processing-wait 60
+            BUILD_ID="$(find_build_id || true)"
+          fi
+
+          if [ -z "$BUILD_ID" ]; then
+            echo "ERROR: could not resolve build id for $VERSION_NAME ($BUILD_NUMBER)" >&2
+            exit 1
+          fi
+
+          app-store-connect builds submit-to-app-store "$BUILD_ID" \
             --whats-new "Bug fixes and performance improvements." \
             --locale en-US \
+            --release-type AFTER_APPROVAL \
             --cancel-previous-submissions \
             --max-build-processing-wait 60
 
