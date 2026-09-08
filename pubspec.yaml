@@ -61,6 +61,18 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.14.3
+
+# Regenerate: dart run flutter_launcher_icons
+# The App Store listing (and the iOS home-screen icon) were still on the
+# stock Flutter placeholder icon — nobody ever pointed the iOS AppIcon.appiconset
+# at the real Movigo Retailer logo. android/ was never touched by this config
+# (ios: true / android: false) — it already has the correct launcher icon.
+flutter_launcher_icons:
+  image_path: "assets/icon/app_icon_source.png"
+  ios: true
+  android: false
+  remove_alpha_ios: true
 
 # Force transitive deps that use removed Flutter v1 embedding to latest versions
 dependency_overrides:
