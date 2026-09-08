@@ -3,16 +3,27 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:movigo/utilities/app_color.dart';
+import 'package:movigo/utilities/app_constant.dart';
 import 'package:movigo/utilities/app_font.dart';
 import 'package:movigo/utilities/app_image.dart';
 
 class ForceUpdateScreen extends StatelessWidget {
   final String latestVersion;
   final String playStoreUrl;
+  final String appStoreUrl;
   const ForceUpdateScreen({
-    super.key, required this.latestVersion, required this.playStoreUrl});
+    super.key, required this.latestVersion, required this.playStoreUrl,
+    this.appStoreUrl = ''});
 
   Future<void> _openStore(BuildContext context) async {
+    if (Platform.isIOS) {
+      final appStore = Uri.parse(
+          appStoreUrl.isNotEmpty ? appStoreUrl : AppConstant.appAppStoreUrl);
+      try {
+        await launchUrl(appStore, mode: LaunchMode.externalApplication);
+      } catch (_) {}
+      return;
+    }
     const id = 'com.app.movigocustomer';
     final market = Uri.parse('market://details?id=$id');
     final browser = Uri.parse(playStoreUrl.isNotEmpty

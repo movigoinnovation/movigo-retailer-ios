@@ -361,6 +361,7 @@ class _SplashScreenState extends State<SplashScreen> {
                   builder: (_) => ForceUpdateScreen(
                     latestVersion: (data['latest_version'] ?? '').toString(),
                     playStoreUrl:  (data['play_store_url']  ?? '').toString(),
+                    appStoreUrl:   (data['app_store_url']   ?? '').toString(),
                   ),
                 ),
               );
@@ -385,6 +386,7 @@ class _SplashScreenState extends State<SplashScreen> {
                   latestVersionCode:
                       int.tryParse(data['latest_version_code']?.toString() ?? '') ?? 0,
                   playStoreUrl: (data['play_store_url'] ?? '').toString(),
+                  appStoreUrl: (data['app_store_url'] ?? '').toString(),
                 ));
               }
             }

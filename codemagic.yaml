@@ -45,6 +45,24 @@ workflows:
           flutter build ipa --release \
             --export-options-plist=/Users/builder/export_options.plist
 
+      - name: Publish to App Store Connect
+        script: |
+          # Codemagic's built-in `publishing.app_store_connect` block has no way
+          # to supply "What's New" text, so an App Store version update fails at
+          # the review-submission step (409: missing required attribute
+          # 'whatsNew'). Do the upload + submission here instead so --whats-new
+          # can be passed. Credentials come from the workflow-level
+          # `integrations.app_store_connect` (APP_STORE_CONNECT_* env vars).
+          app-store-connect publish \
+            --path "build/ios/ipa/*.ipa" \
+            --app-store \
+            --platform IOS \
+            --release-type AFTER_APPROVAL \
+            --whats-new "Bug fixes and performance improvements." \
+            --locale en-US \
+            --cancel-previous-submissions \
+            --max-build-processing-wait 60
+
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
@@ -58,10 +76,3 @@ workflows:
         notify:
           success: true
           failure: true
-
-      app_store_connect:
-        auth: integration
-        submit_to_testflight: false
-        submit_to_app_store: true
-        release_type: AFTER_APPROVAL
-        cancel_previous_submissions: true

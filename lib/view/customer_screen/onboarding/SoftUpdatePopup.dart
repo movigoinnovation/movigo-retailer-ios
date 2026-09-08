@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:movigo/utilities/app_color.dart';
+import 'package:movigo/utilities/app_constant.dart';
 import 'package:movigo/utilities/app_font.dart';
 
 // Dismissible "a new version is available" popup — shown when the backend's
@@ -16,12 +17,14 @@ class SoftUpdatePopup extends StatelessWidget {
   final String latestVersion;
   final int latestVersionCode;
   final String playStoreUrl;
+  final String appStoreUrl;
 
   const SoftUpdatePopup({
     super.key,
     required this.latestVersion,
     required this.latestVersionCode,
     required this.playStoreUrl,
+    this.appStoreUrl = '',
   });
 
   static const _prefsKey = 'retailer_ignored_update_version_code';
@@ -34,6 +37,7 @@ class SoftUpdatePopup extends StatelessWidget {
     required String latestVersion,
     required int latestVersionCode,
     required String playStoreUrl,
+    String appStoreUrl = '',
   }) async {
     if (latestVersionCode <= 1) return;
     final prefs = await SharedPreferences.getInstance();
@@ -48,11 +52,21 @@ class SoftUpdatePopup extends StatelessWidget {
         latestVersion: latestVersion,
         latestVersionCode: latestVersionCode,
         playStoreUrl: playStoreUrl,
+        appStoreUrl: appStoreUrl,
       ),
     );
   }
 
   Future<void> _openStore(BuildContext context) async {
+    if (Platform.isIOS) {
+      final appStore = Uri.parse(
+          appStoreUrl.isNotEmpty ? appStoreUrl : AppConstant.appAppStoreUrl);
+      try {
+        await launchUrl(appStore, mode: LaunchMode.externalApplication);
+      } catch (_) {}
+      if (context.mounted) Navigator.of(context).pop();
+      return;
+    }
     final market = Uri.parse('market://details?id=$_packageId');
     final browser = Uri.parse(playStoreUrl.isNotEmpty
         ? playStoreUrl

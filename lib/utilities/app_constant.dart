@@ -16,6 +16,11 @@ class AppConstant {
   static const String appPlayStoreUrl =
       'https://play.google.com/store/apps/details?id=com.app.movigocustomer';
 
+  // iOS App Store listing for the Movigo Retailer app (App Store ID 6793887251).
+  // Used on iOS wherever appPlayStoreUrl is used on Android.
+  static const String appAppStoreUrl =
+      'https://apps.apple.com/app/id6793887251';
+
   static String razorpayKeyFromOrder(Map<String, dynamic>? orderData) {
     if (orderData == null) return razorpayKey;
     final dynamic key = orderData["razorpay_key"] ?? orderData["key"] ?? orderData["key_id"];
