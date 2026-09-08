@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer';
+import 'dart:io' show Platform;
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -8,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 import 'package:geolocator/geolocator.dart';
@@ -310,21 +312,26 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<bool> _checkForceUpdate() async {
     try {
-      int buildNumber = 50; // sync with pubspec version code
+      // Cross-platform build number via package_info_plus (reads the actual
+      // installed CFBundleVersion/versionCode) instead of a Dart-side
+      // hardcoded fallback. The previous implementation read this through an
+      // Android-only MethodChannel ('com.movigo.retailer/permissions') that
+      // has no iOS-side handler — on iOS it always threw and silently fell
+      // back to a hardcoded stale number, so the backend never learned the
+      // real installed build and could never force/soft-update iOS at all.
+      int buildNumber = 1;
       try {
-        const channel = MethodChannel('com.movigo.retailer/permissions');
-        final raw = await channel.invokeMapMethod<String, dynamic>('getAppVersion');
-        if (raw != null && raw['versionCode'] != null) {
-          buildNumber = raw['versionCode'];
-        }
+        final info = await PackageInfo.fromPlatform();
+        buildNumber = int.tryParse(info.buildNumber) ?? 1;
       } catch (e) {
-        log('Error fetching dynamic version code: $e');
+        log('Error fetching app version via PackageInfo: $e');
       }
 
       const String appType  = 'retailer';
+      final String platform = Platform.isIOS ? 'ios' : 'android';
       final url = Uri.parse(
         '${AppConfigProvider.apiUrl}app_version_check'
-        '?app_type=$appType&version_code=$buildNumber',
+        '?app_type=$appType&version_code=$buildNumber&platform=$platform',
       );
       final resp = await http
           .get(url, headers: {
