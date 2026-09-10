@@ -36,6 +36,7 @@ import 'route_vehicle_screen.dart';
 import 'package:movigo/utilities/app_tour_spotlight.dart';
 import 'package:movigo/view/customer_screen/coins/coin_wallet_screen.dart';
 import 'package:movigo/view/customer_screen/coins/coin_missions_screen.dart';
+import 'package:movigo/view/retailer_screen/retailer_account_screen/enterprise_mode_screen.dart';
 import 'package:movigo/Provider/common_api_helper/common_api_helper.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:movigo/helper/contacts_permission_helper.dart';
@@ -3483,6 +3484,8 @@ class _ActiveBookingTracker extends StatelessWidget {
               dropLat: _num(drop?['latitude']),
               dropLng: _num(drop?['longitude']),
               bookingStatus: status,
+              driverName: driver?['full_name']?.toString(),
+              driverPhone: driver?['phone_number']?.toString(),
             ),
           ),
         );
@@ -5419,14 +5422,32 @@ class _PromoBannerCarouselState extends State<_PromoBannerCarousel> {
         );
       }
     } else if (actionType == 'screen') {
-      // 'noticeboard' and any unrecognized screen key both land here, so a
-      // banner posted without a specific screen still goes somewhere useful.
-      if (mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const NoticeboardScreen()),
-        );
+      if (!mounted) return;
+      // Named in-app destinations, configured from the admin panel.
+      Widget dest;
+      switch (actionValue) {
+        case 'coins':
+        case 'wallet':
+          dest = const CoinWalletScreen();
+          break;
+        case 'missions':
+          dest = const CoinMissionsScreen();
+          break;
+        case 'enterprise':
+          dest = const EnterpriseModeScreen();
+          break;
+        case 'orders':
+          dest = const CustomBottomNav(
+            userType: UserType.retailer,
+            initialIndex: 1,
+            bookingTabIndex: 0,
+          );
+          break;
+        case 'noticeboard':
+        default:
+          dest = const NoticeboardScreen();
       }
+      Navigator.push(context, MaterialPageRoute(builder: (_) => dest));
     }
     // 'none' — informational banner, intentionally not tappable.
   }
@@ -5486,6 +5507,9 @@ class _PromoBannerCarouselState extends State<_PromoBannerCarousel> {
                               ),
                             ),
                           ),
+                          // No title → show ONLY the raw image (no gradient,
+                          // no badge, no button). Tap still navigates.
+                          if (title.isNotEmpty)
                           Positioned.fill(
                             child: Container(
                               decoration: BoxDecoration(
@@ -5501,6 +5525,7 @@ class _PromoBannerCarouselState extends State<_PromoBannerCarousel> {
                               ),
                             ),
                           ),
+                          if (title.isNotEmpty)
                           Padding(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 16, vertical: 12),

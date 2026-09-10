@@ -15,6 +15,8 @@ class RTrackDriverScreen extends StatelessWidget {
   final double? dropLat;
   final double? dropLng;
   final String? bookingStatus;
+  final String? driverName;
+  final String? driverPhone;
 
   const RTrackDriverScreen({
     super.key,
@@ -30,6 +32,8 @@ class RTrackDriverScreen extends StatelessWidget {
     this.dropLat,
     this.dropLng,
     this.bookingStatus,
+    this.driverName,
+    this.driverPhone,
   });
 
   @override
@@ -47,6 +51,8 @@ class RTrackDriverScreen extends StatelessWidget {
       dropLat: dropLat,
       dropLng: dropLng,
       bookingStatus: bookingStatus,
+      driverName: driverName,
+      driverPhone: driverPhone,
     );
   }
 }

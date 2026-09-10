@@ -48,6 +48,12 @@ class _SignupScreenState extends State<SignupScreen>
   String _termsUrl  = '';
   String _privacyUrl = '';
 
+  // ── Field officer credit (optional, picked from the 3-line menu) ────────────
+  List<Map<String, dynamic>> _officers = [];
+  bool _officersLoading = false;
+  String? _selectedOfficerId;
+  String? _selectedOfficerName;
+
 
   @override
   void initState() {
@@ -56,7 +62,19 @@ class _SignupScreenState extends State<SignupScreen>
       _mobileCtrl.text = widget.mobile!;
     }
     _loadContent();
+    _loadFieldOfficers();
 
+  }
+
+  Future<void> _loadFieldOfficers() async {
+    setState(() => _officersLoading = true);
+    final p = Provider.of<PostApiProvider>(context, listen: false);
+    final list = await p.fetchFieldOfficersApi(context);
+    if (!mounted) return;
+    setState(() {
+      _officers = list;
+      _officersLoading = false;
+    });
   }
 
   void _loadContent() {
@@ -103,8 +121,152 @@ class _SignupScreenState extends State<SignupScreen>
       landmark:     _gstCtrl.text.trim().isNotEmpty
                       ? 'GST: ${_gstCtrl.text.trim()}' : '',
       profileImage: null,
+      onboardedByOfficerId: _selectedOfficerId,
     );
     if (ok) Get.offAll(() => CustomBottomNav(userType: UserType.retailer));
+  }
+
+  // ── 3-line menu → "who helped you download the app?" picker ────────────────
+  void _openFieldOfficerPicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final maxH = MediaQuery.of(ctx).size.height * 0.7;
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxH),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 12),
+                Container(
+                  width: 40, height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.black12,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                  child: Text(
+                    'Who helped you download the app?',
+                    style: TextStyle(
+                      color: AppColor.blackColor,
+                      fontFamily: AppFont.fontFamily,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 17,
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Optional — pick the field officer who onboarded you. '
+                      'This can only be set once.',
+                      style: TextStyle(
+                        color: AppColor.textColorTwo,
+                        fontFamily: AppFont.fontFamily,
+                        fontSize: 12.5,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+                Flexible(
+                  child: _officersLoading
+                      ? const Padding(
+                          padding: EdgeInsets.all(28),
+                          child: CircularProgressIndicator(
+                              color: AppColor.themeColor),
+                        )
+                      : _officers.isEmpty
+                          ? Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Column(
+                                children: [
+                                  const Text(
+                                    "Couldn't load the list.",
+                                    style: TextStyle(
+                                      color: AppColor.textColorTwo,
+                                      fontFamily: AppFont.fontFamily,
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: () {
+                                      Navigator.pop(ctx);
+                                      _loadFieldOfficers().then((_) {
+                                        if (mounted) _openFieldOfficerPicker();
+                                      });
+                                    },
+                                    child: const Text('Retry'),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : ListView(
+                              shrinkWrap: true,
+                              children: [
+                                RadioListTile<String?>(
+                                  value: null,
+                                  groupValue: _selectedOfficerId,
+                                  activeColor: AppColor.primaryColor,
+                                  title: const Text(
+                                    'None / I signed up on my own',
+                                    style: TextStyle(
+                                      fontFamily: AppFont.fontFamily,
+                                      fontSize: 14.5,
+                                    ),
+                                  ),
+                                  onChanged: (_) {
+                                    setState(() {
+                                      _selectedOfficerId = null;
+                                      _selectedOfficerName = null;
+                                    });
+                                    Navigator.pop(ctx);
+                                  },
+                                ),
+                                ..._officers.map((o) {
+                                  final id = o['_id']?.toString();
+                                  final name =
+                                      (o['name'] ?? '').toString();
+                                  return RadioListTile<String?>(
+                                    value: id,
+                                    groupValue: _selectedOfficerId,
+                                    activeColor: AppColor.primaryColor,
+                                    title: Text(
+                                      name,
+                                      style: const TextStyle(
+                                        fontFamily: AppFont.fontFamily,
+                                        fontSize: 14.5,
+                                      ),
+                                    ),
+                                    onChanged: (val) {
+                                      setState(() {
+                                        _selectedOfficerId = val;
+                                        _selectedOfficerName = name;
+                                      });
+                                      Navigator.pop(ctx);
+                                    },
+                                  );
+                                }),
+                                const SizedBox(height: 8),
+                              ],
+                            ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _snack(String msg) =>
@@ -128,7 +290,9 @@ class _SignupScreenState extends State<SignupScreen>
         child: Scaffold(
           backgroundColor: Colors.white,
           body: SafeArea(
-            child: SingleChildScrollView(
+            child: Stack(
+              children: [
+                SingleChildScrollView(
               physics: const BouncingScrollPhysics(),
               child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: size.width * 0.07),
@@ -176,6 +340,38 @@ class _SignupScreenState extends State<SignupScreen>
 
                     // ── Fields (always Retailer) ─────────────────────────
                     _retailerFields(size),
+
+                    if (_selectedOfficerId != null) ...[
+                      SizedBox(height: size.height * 0.015),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: AppColor.primaryColor.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.person_pin_circle_outlined,
+                                  size: 16, color: AppColor.primaryColor),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Field officer: ${_selectedOfficerName ?? ''}',
+                                style: const TextStyle(
+                                  color: AppColor.primaryColor,
+                                  fontFamily: AppFont.fontFamily,
+                                  fontWeight: FontWeight.w500,
+                                  fontSize: 12.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
 
                     SizedBox(height: size.height * 0.03),
 
@@ -264,6 +460,19 @@ class _SignupScreenState extends State<SignupScreen>
                   ],
                 ),
               ),
+            ),
+
+                // ── 3-line menu (field officer credit) ────────────────────
+                Positioned(
+                  top: 4,
+                  right: 4,
+                  child: IconButton(
+                    tooltip: 'Field officer',
+                    icon: const Icon(Icons.menu, color: AppColor.blackColor),
+                    onPressed: _openFieldOfficerPicker,
+                  ),
+                ),
+              ],
             ),
           ),
         ),

@@ -27,6 +27,7 @@ import 'help_and_support_screen.dart';
 import 'package:movigo/view/customer_screen/coins/coin_wallet_screen.dart';
 import 'package:movigo/view/retailer_screen/retailer_account_screen/join_business_screen.dart';
 import 'package:movigo/view/retailer_screen/retailer_account_screen/register_business_screen.dart';
+import 'package:movigo/view/retailer_screen/retailer_account_screen/enterprise_mode_screen.dart';
 import 'package:movigo/utilities/app_snackbar_toast_message.dart';
 
 class AccountScreen extends StatefulWidget {
@@ -645,6 +646,17 @@ class _AccountScreenState extends State<AccountScreen> {
 
                 // ── Business Mode: linked-to-business indicator / join+register entry points ──
                 if (userType == 'Retailer') _businessStatusSection(size),
+
+                // ── Movigo Enterprise (feature showcase + interest form) ──
+                if (userType == 'Retailer')
+                  _menuSection(context, title: 'Enterprise', items: [
+                    _MenuEntry(
+                      icon: AppImage.storeDoorIcon,
+                      title: 'Movigo Enterprise',
+                      onTap: () => Get.to(() => const EnterpriseModeScreen()),
+                    ),
+                  ]),
+                if (userType == 'Retailer') SizedBox(height: size.height * 0.02),
 
                 // ── Grouped menu sections ──
                 _menuSection(context, title: 'Legal', items: [

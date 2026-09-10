@@ -350,6 +350,21 @@ class PostApiProvider with ChangeNotifier {
   }
 
   // ================= RETAILER SIGNUP ================= //
+  // ── Field officers (public list for the "who helped you download the app?"
+  // picker on the signup screen). Returns [] on any failure — it is optional.
+  Future<List<Map<String, dynamic>>> fetchFieldOfficersApi(
+      BuildContext context) async {
+    try {
+      final res = await getData('auth/field-officers', context);
+      if (res != null && res['success'] == true && res['data'] is List) {
+        return (res['data'] as List)
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
   Future<bool> retailerSignupApi(
     BuildContext context, {
     required String businessName,
@@ -360,6 +375,7 @@ class PostApiProvider with ChangeNotifier {
     required String address,
     required String landmark,
     XFile? profileImage,
+    String? onboardedByOfficerId,
   }) async {
     setLoading(true);
 
@@ -375,6 +391,10 @@ class PostApiProvider with ChangeNotifier {
       'player_id': AppConstant.playerID.toString(),
       'device_type': AppConstant.deviceType,
     };
+
+    if (onboardedByOfficerId != null && onboardedByOfficerId.isNotEmpty) {
+      fields['onboarded_by_officer_id'] = onboardedByOfficerId;
+    }
 
     Map<String, XFile>? files;
     if (profileImage != null) {
@@ -1426,6 +1446,29 @@ class PostApiProvider with ChangeNotifier {
   //
 
   // ==================== BUSINESS MODE API ==================== //
+
+  // Enterprise Mode interest form (Retailer app → BusinessLead in admin panel).
+  Future<Map<String, dynamic>?> submitBusinessLeadApi(
+    BuildContext context, {
+    required String businessName,
+    required String contactName,
+    required String phoneNumber,
+    required String email,
+    String message = '',
+  }) async {
+    return postJsonData(
+      'business/lead',
+      {
+        'businessName': businessName,
+        'contactName': contactName,
+        'phoneNumber': phoneNumber,
+        'email': email,
+        'message': message,
+      },
+      context,
+      headers: {'Authorization': 'Bearer ${AppConstant.token}'},
+    );
+  }
 
   Future<Map<String, dynamic>?> getBusinessStatusApi(BuildContext context) async {
     final res = await getData(

@@ -14,6 +14,7 @@ import 'package:movigo/utilities/app_color.dart';
 import 'package:movigo/utilities/app_constant.dart';
 import 'package:movigo/utilities/app_font.dart';
 import 'package:movigo/utilities/app_footer.dart';
+import 'package:movigo/helper/map_style.dart';
 import 'booking_detail_screen.dart';
 
 class FindingDriverScreen extends StatefulWidget {
@@ -393,8 +394,18 @@ class _FindingDriverScreenState extends State<FindingDriverScreen> with TickerPr
             myLocationEnabled: false,
             zoomControlsEnabled: false,
             mapToolbarEnabled: false,
+            compassEnabled: false,
+            // Locked on the pickup point while we search for a driver — the
+            // map must not pan/zoom/rotate under the radar animation.
+            scrollGesturesEnabled: false,
+            zoomGesturesEnabled: false,
+            rotateGesturesEnabled: false,
+            tiltGesturesEnabled: false,
             markers: _markers,
-            onMapCreated: (controller) => _mapController = controller,
+            onMapCreated: (controller) {
+              _mapController = controller;
+              controller.setMapStyle(kPorterMapStyle);
+            },
           ),
 
           // Smooth pulsing hardware-accelerated radar circles in the center of the screen

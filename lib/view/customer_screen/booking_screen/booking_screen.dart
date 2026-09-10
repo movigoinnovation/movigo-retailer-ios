@@ -311,15 +311,33 @@ class _BookingScreenState extends State<BookingScreen> {
                       return const BookingShimmer();
                     }
 
-                    // empty state
+                    // empty state — still pull-to-refreshable
                     if (list.isEmpty) {
-                      return Center(
-                        child: Text(
-                          AppLanguage.noBookingsYetText[language],
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontFamily: AppFont.fontFamily,
-                            color: AppColor.greyColor,
+                      return RefreshIndicator(
+                        onRefresh: () async {
+                          await Provider.of<AcceptedBookingController>(context,
+                                  listen: false)
+                              .getBookings(context,
+                                  bookingKey: controller.currentBookingKey);
+                        },
+                        child: LayoutBuilder(
+                          builder: (context, constraints) => ListView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            children: [
+                              SizedBox(
+                                height: constraints.maxHeight,
+                                child: Center(
+                                  child: Text(
+                                    AppLanguage.noBookingsYetText[language],
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontFamily: AppFont.fontFamily,
+                                      color: AppColor.greyColor,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       );
@@ -358,6 +376,9 @@ class _BookingScreenState extends State<BookingScreen> {
       },
       child: ListView.builder(
         controller: _scrollController,
+        // Without this, a list that doesn't overflow the screen has no scroll
+        // extent, so the pull-to-refresh gesture never fires.
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.symmetric(horizontal: 16),
         itemCount: list.length + (isLoadingMore ? 1 : 0),
         itemBuilder: (context, index) {

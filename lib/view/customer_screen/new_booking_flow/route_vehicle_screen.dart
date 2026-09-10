@@ -2923,15 +2923,7 @@ class _RouteVehicleScreenState extends State<RouteVehicleScreen> {
                   // Fare
                   loading
                       ? const _FareSkeleton(selected: true)
-                      : Text(
-                          fare != null && fare > 0 ? '₹$fare' : '—',
-                          style: const TextStyle(
-                            fontFamily: AppFont.fontFamily,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 20,
-                            color: Color(0xFF0F172A),
-                          ),
-                        ),
+                      : _fareBlock(c, fare, selected: true),
                 ],
               ),
             ],
@@ -2943,6 +2935,71 @@ class _RouteVehicleScreenState extends State<RouteVehicleScreen> {
           top: 14,
           right: -4,
           child: _build3DBookmark(c),
+        ),
+      ],
+    );
+  }
+
+  /// Fare display for a vehicle tile. When the retailer is eligible for the
+  /// first-ride offer (backend flags it per vehicle in `_discountByKey`), the
+  /// pre-discount total is struck through and a "X% OFF" pill sits beside the
+  /// discounted rate — same treatment as the confirm screen.
+  Widget _fareBlock(_VehicleChoice c, int? fare, {required bool selected}) {
+    final bool hasFare = fare != null && fare > 0;
+    final disc = _discountByKey[c.key];
+    final int amount = (disc?['amount'] as num?)?.toInt() ?? 0;
+    final int percent = (disc?['percent'] as num?)?.toInt() ?? 0;
+    final bool showDisc = hasFare && disc != null && amount > 0;
+
+    final TextStyle mainStyle = TextStyle(
+      fontFamily: AppFont.fontFamily,
+      fontWeight: FontWeight.w800,
+      fontSize: selected ? 20 : 16,
+      color: const Color(0xFF0F172A),
+    );
+
+    if (!showDisc) {
+      return Text(hasFare ? '₹$fare' : '—', style: mainStyle);
+    }
+
+    final int original = (fare ?? 0) + amount;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '₹$original',
+          style: TextStyle(
+            fontFamily: AppFont.fontFamily,
+            fontWeight: FontWeight.w600,
+            fontSize: selected ? 12 : 10.5,
+            color: const Color(0xFF94A3B8),
+            decoration: TextDecoration.lineThrough,
+          ),
+        ),
+        const SizedBox(height: 1),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('₹$fare', style: mainStyle),
+            const SizedBox(width: 5),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFF16A34A).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '$percent% OFF',
+                style: const TextStyle(
+                  fontFamily: AppFont.fontFamily,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 9.5,
+                  color: Color(0xFF16A34A),
+                ),
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -3044,15 +3101,7 @@ class _RouteVehicleScreenState extends State<RouteVehicleScreen> {
               // Fare
               loading
                   ? const _FareSkeleton(selected: false)
-                  : Text(
-                      fare != null && fare > 0 ? '₹$fare' : '—',
-                      style: const TextStyle(
-                        fontFamily: AppFont.fontFamily,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
-                        color: Color(0xFF0F172A),
-                      ),
-                    ),
+                  : _fareBlock(c, fare, selected: false),
             ],
           ),
         ),

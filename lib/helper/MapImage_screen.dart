@@ -16,6 +16,19 @@ import 'package:movigo/utilities/app_constant.dart';
 import 'package:movigo/utilities/app_image.dart';
 import 'package:movigo/utilities/app_language.dart';
 import 'package:movigo/Provider/socket_connection/socket_provider.dart';
+import 'package:movigo/Provider/Post_Provider/post_api_provider.dart';
+import 'package:movigo/helper/map_style.dart';
+
+/// Result of a route lookup — the polyline geometry plus the road-network
+/// duration / distance pulled from the same Directions response (so the ETA
+/// shown on screen is a real driving estimate, not a straight-line guess).
+class _RouteResult {
+  final List<LatLng> points;
+  final int? durationSec;
+  final double? distanceMeters;
+  const _RouteResult(this.points, {this.durationSec, this.distanceMeters});
+  bool get isEmpty => points.isEmpty;
+}
 
 class MapImageScreen extends StatefulWidget {
   var userId;
@@ -30,6 +43,10 @@ class MapImageScreen extends StatefulWidget {
   final double? dropLat;
   final double? dropLng;
   final String? bookingStatus;
+
+  // Optional — shown in the redesigned bottom sheet when supplied by the caller.
+  final String? driverName;
+  final String? driverPhone;
 
   final bool isEmbed;
 
@@ -47,6 +64,8 @@ class MapImageScreen extends StatefulWidget {
     this.dropLat,
     this.dropLng,
     this.bookingStatus,
+    this.driverName,
+    this.driverPhone,
     this.isEmbed = false,
   });
 
@@ -54,7 +73,8 @@ class MapImageScreen extends StatefulWidget {
   State<MapImageScreen> createState() => _MapImageState();
 }
 
-class _MapImageState extends State<MapImageScreen> {
+class _MapImageState extends State<MapImageScreen>
+    with SingleTickerProviderStateMixin {
   double raduis = 1000.0;
   Timer? _timer;
   final Set<Marker> _markers = {};
@@ -87,6 +107,10 @@ class _MapImageState extends State<MapImageScreen> {
   double previousDistance = double.infinity;
   bool isDriverApproaching = false;
   int _etaMinutes = 0;
+  // ETA is a simple distance ÷ constant-speed estimate — never the live traffic
+  // duration. Uses the road-route distance when we have it, else straight-line.
+  static const double _avgSpeedKmph = 22.0;
+  double? _roadDistanceMeters;
   double autoZoomThreshold = 1000;
   String deliveryStatus = "Driver is on the way";
   BitmapDescriptor? _driverMarkerIcon;
@@ -95,18 +119,56 @@ class _MapImageState extends State<MapImageScreen> {
   final Map<String, LatLng> _routeEndCache = {};
   final Map<String, DateTime> _routeFetchedAt = {};
   final Map<String, bool> _routeFetching = {};
+  final Map<String, _RouteResult> _routeMetaCache = {};
   DateTime? _lastCameraFitAt;
   bool _isManualRefreshing = false;
   static const Color _googleMapsBlue = Color(0xFF4285F4);
+
+  // ── Redesign state ───────────────────────────────────────────────────────
+  // The map auto-follows the driver until the retailer pans/zooms it once —
+  // after that it stays where they left it until they tap "recenter".
+  bool _userMovedMap = false;
+  bool _programmaticMove = false;
+  late final AnimationController _pulseCtrl;
+  List<Map<String, dynamic>> _banners = [];
+  final PageController _bannerPage = PageController();
+  Timer? _bannerTimer;
+  int _bannerIndex = 0;
+
+  // Dotted line style shared by every polyline on the map.
+  static final List<PatternItem> _dash = <PatternItem>[
+    PatternItem.dash(20),
+    PatternItem.gap(12),
+  ];
 
   String get _resolvedBookingId =>
       (widget.bookingId?.toString().trim().isNotEmpty == true
           ? widget.bookingId.toString()
           : widget.driverId.toString());
 
+  // "Finding a driver" phase — the map is pinned on pickup and frozen.
+  bool get _isSearching {
+    final s = (widget.bookingStatus ?? '').trim().toLowerCase();
+    if (s.isEmpty) {
+      return widget.driverId == null ||
+          widget.driverId.toString().trim().isEmpty;
+    }
+    return s == 'pending' ||
+        s == 'searching' ||
+        s == 'requested' ||
+        s == 'created' ||
+        s.contains('finding') ||
+        s.contains('searching');
+  }
+
   @override
   void initState() {
     super.initState();
+
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    )..repeat();
 
     // Only track if booking is active (not yet Delivered or Cancelled)
     final status = widget.bookingStatus?.toLowerCase() ?? '';
@@ -120,6 +182,7 @@ class _MapImageState extends State<MapImageScreen> {
         await socketProvider.startTrackingDriver(bookingId: widget.bookingId.toString());
       }
       await _emitDriverLocationRequest();
+      _loadBanners();
     });
 
     // Fallback REST poll — Pusher handles real-time; this is only for
@@ -142,7 +205,9 @@ class _MapImageState extends State<MapImageScreen> {
       dropLocation = LatLng(widget.dropLat!, widget.dropLng!);
     }
 
-    if (widget.targetLat != null && widget.targetLng != null) {
+    if (_isSearching && pickupLocation != null) {
+      initialPosition = pickupLocation!;
+    } else if (widget.targetLat != null && widget.targetLng != null) {
       lat = widget.targetLat!;
       long = widget.targetLng!;
       initialPosition = LatLng(lat, long);
@@ -155,6 +220,31 @@ class _MapImageState extends State<MapImageScreen> {
     _renderStaticLocationMarkers();
     mapshow = true;
     _loadDriverMarkerIcon();
+  }
+
+  Future<void> _loadBanners() async {
+    try {
+      final provider = Provider.of<PostApiProvider>(context, listen: false);
+      final res = await provider.getPromoBannersApi(context);
+      final list = (res?['data'] as List?) ?? [];
+      if (!mounted) return;
+      setState(() {
+        _banners = list
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .where((b) => (b['image'] ?? '').toString().isNotEmpty)
+            .toList();
+      });
+      if (_banners.length > 1) {
+        _bannerTimer?.cancel();
+        _bannerTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+          if (!mounted || !_bannerPage.hasClients || _banners.isEmpty) return;
+          _bannerIndex = (_bannerIndex + 1) % _banners.length;
+          _bannerPage.animateToPage(_bannerIndex,
+              duration: const Duration(milliseconds: 450), curve: Curves.easeInOut);
+        });
+      }
+    } catch (_) {}
   }
 
   void _renderStaticLocationMarkers() {
@@ -252,16 +342,12 @@ class _MapImageState extends State<MapImageScreen> {
     final BitmapDescriptor scooterIcon =
         _driverMarkerIcon ?? BitmapDescriptor.defaultMarker;
 
-    List<LatLng> activeLeg = [];
+    _RouteResult activeLeg = const _RouteResult([]);
     List<LatLng> pickupToDropLeg = [];
     List<LatLng> pickupToDriverLeg = [];
 
     if (activeTarget != null) {
       currentDistance = calculateDistance(activeTarget, driverLocation!);
-      // Cost optimisation: refresh route only when driver moves ≥150 m OR
-      // 60 s have elapsed — down from 35 m / 8 s. The polyline doesn't
-      // change meaningfully in 8 seconds; this alone cuts active_leg
-      // Directions API calls by ~87%.
       activeLeg = await _getCachedRoute(
         key: 'active_leg',
         start: driverLocation!,
@@ -269,26 +355,28 @@ class _MapImageState extends State<MapImageScreen> {
         minRefreshDistanceMeters: 150,
         minRefreshSeconds: 60,
       );
+      // Road-route distance (not duration) — fed into the constant-speed ETA.
+      _roadDistanceMeters = activeLeg.distanceMeters;
     } else {
       currentDistance = 0;
+      _roadDistanceMeters = null;
     }
 
     if (pickupLocation != null && dropLocation != null) {
-      // pickup→drop is a static route; fetch once and hold for 10 minutes.
-      pickupToDropLeg = await _getCachedRoute(
+      final r = await _getCachedRoute(
         key: 'pickup_to_drop',
         start: pickupLocation!,
         end: dropLocation!,
         minRefreshDistanceMeters: 500,
         minRefreshSeconds: 600,
       );
+      pickupToDropLeg = r.points;
     }
 
-    // Cost optimisation: replace the "traveled path" Directions API call with
-    // a simple straight-line polyline. The green covered-leg is decorative —
-    // a road route isn't necessary and was generating ~90 API calls per delivery.
+    // Covered leg (pickup → driver) is decorative — draw a smooth curved arc
+    // instead of a straight tether, no API call.
     if (isPostPickup && pickupLocation != null) {
-      pickupToDriverLeg = [pickupLocation!, driverLocation!];
+      pickupToDriverLeg = _curve(pickupLocation!, driverLocation!, bend: 0.16);
     }
 
     if (!isPostPickup && pickupToDropLeg.isNotEmpty) {
@@ -296,9 +384,12 @@ class _MapImageState extends State<MapImageScreen> {
         Polyline(
           polylineId: const PolylineId('future_leg'),
           points: pickupToDropLeg,
-          color: Colors.grey.shade500,
+          color: Colors.grey.shade400,
           width: 5,
-          geodesic: true,
+          patterns: _dash,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
         ),
       );
     }
@@ -308,21 +399,27 @@ class _MapImageState extends State<MapImageScreen> {
         Polyline(
           polylineId: const PolylineId('covered_leg'),
           points: pickupToDriverLeg,
-          color: Colors.green.shade600,
+          color: AppColor.successCOlor,
           width: 5,
-          geodesic: true,
+          patterns: _dash,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
         ),
       );
     }
 
-    if (activeLeg.isNotEmpty) {
+    if (activeLeg.points.isNotEmpty) {
       _polyline.add(
         Polyline(
           polylineId: const PolylineId('active_leg'),
-          points: activeLeg,
-          color: _googleMapsBlue,
-          width: 7,
-          geodesic: true,
+          points: activeLeg.points,
+          color: AppColor.themeColor,
+          width: 6,
+          patterns: _dash,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
         ),
       );
     }
@@ -376,12 +473,35 @@ class _MapImageState extends State<MapImageScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _bannerTimer?.cancel();
+    _bannerPage.dispose();
+    _pulseCtrl.dispose();
     // Stop Pusher tracking when screen closes - use try/catch since context may be invalid
     try {
       final socketProvider = context.read<SocketProvider>();
       socketProvider.stopTrackingDriver();
     } catch (_) {}
     super.dispose();
+  }
+
+  // ── Camera helpers ───────────────────────────────────────────────────────
+  void _animateCamera(CameraUpdate update) {
+    _programmaticMove = true;
+    mapController?.animateCamera(update);
+    Future.delayed(const Duration(milliseconds: 550), () {
+      _programmaticMove = false;
+    });
+  }
+
+  void _onCameraMoveStarted() {
+    // A gesture (not one of our animateCamera calls) — stop auto-following.
+    if (_programmaticMove || _isSearching) return;
+    if (!_userMovedMap) setState(() => _userMovedMap = true);
+  }
+
+  void _recenter() {
+    setState(() => _userMovedMap = false);
+    _fitMapToAvailableLocations(throttled: false);
   }
 
   @override
@@ -405,497 +525,670 @@ class _MapImageState extends State<MapImageScreen> {
         statusBarIconBrightness: Brightness.dark));
 
     if (widget.isEmbed) {
-      final bool isPostPickup = _isPostPickupStatus(widget.bookingStatus);
-      return Container(
-        width: MediaQuery.of(context).size.width,
-        color: Colors.white,
-        child: Stack(
-          children: [
-            mapshow
+      return _buildEmbed(context);
+    }
+
+    final bool isPostPickup = _isPostPickupStatus(widget.bookingStatus);
+    final int etaMin = _etaMinutes;
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Stack(
+        children: [
+          // ── Map ──────────────────────────────────────────────────────────
+          Positioned.fill(
+            child: mapshow
                 ? GoogleMap(
                     myLocationButtonEnabled: false,
                     myLocationEnabled: false,
                     mapType: MapType.normal,
                     compassEnabled: false,
+                    zoomControlsEnabled: false,
+                    scrollGesturesEnabled: !_isSearching,
+                    zoomGesturesEnabled: !_isSearching,
+                    rotateGesturesEnabled: false,
+                    tiltGesturesEnabled: false,
+                    padding: EdgeInsets.only(
+                      top: MediaQuery.of(context).padding.top + 70,
+                      bottom: _isSearching ? 220 : 260,
+                    ),
                     initialCameraPosition: CameraPosition(
-                      target: initialPosition,
-                      zoom: 15.0,
+                      target: _isSearching && pickupLocation != null
+                          ? pickupLocation!
+                          : initialPosition,
+                      zoom: _isSearching ? 16.0 : 15.0,
                     ),
                     polylines: _polyline,
                     markers: _markers,
                     circles: _circles,
+                    onCameraMoveStarted: _onCameraMoveStarted,
                     onMapCreated: (GoogleMapController controller) {
                       mapController = controller;
-                      controller.setMapStyle('''
-                        [
-                          {
-                            "featureType": "poi",
-                            "elementType": "all",
-                            "stylers": [
-                              { "visibility": "off" }
-                            ]
-                          },
-                          {
-                            "featureType": "transit",
-                            "elementType": "all",
-                            "stylers": [
-                              { "visibility": "off" }
-                            ]
-                          }
-                        ]
-                      ''');
+                      controller.setMapStyle(kPorterMapStyle);
                       if (!_controller.isCompleted) {
                         _controller.complete(controller);
+                      }
+                      if (!_isSearching) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          _fitMapToAvailableLocations(throttled: false);
+                        });
                       }
                     },
                   )
                 : const Center(
                     child: CircularProgressIndicator(color: AppColor.themeColor),
                   ),
+          ),
 
-            // ── ETA strip at the bottom of the embedded map ──────────
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.95),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.08),
-                      blurRadius: 6,
-                      offset: const Offset(0, -2),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      isPostPickup
-                          ? Icons.local_shipping_rounded
-                          : Icons.directions_bike_rounded,
-                      color: isPostPickup
-                          ? Colors.green.shade600
-                          : AppColor.themeColor,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            deliveryStatus,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          if (currentDistance > 0)
-                            Text(
-                              '${(currentDistance / 1000).toStringAsFixed(1)} km away',
-                              style: TextStyle(
-                                  fontSize: 11, color: Colors.grey[500]),
-                            ),
-                        ],
-                      ),
-                    ),
-                    if (_etaMinutes > 0)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: isPostPickup
-                              ? Colors.green.shade50
-                              : AppColor.themeColor.withOpacity(0.08),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: isPostPickup
-                                ? Colors.green.shade300
-                                : AppColor.themeColor.withOpacity(0.3),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.schedule_rounded,
-                              size: 12,
-                              color: isPostPickup
-                                  ? Colors.green.shade700
-                                  : AppColor.themeColor,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              _etaLabel(isPostPickup),
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: isPostPickup
-                                    ? Colors.green.shade700
-                                    : AppColor.themeColor,
-                              ),
-                            ),
-                          ],
+          // ── Searching pulse over the pickup pin ──────────────────────────
+          if (_isSearching)
+            Center(
+              child: IgnorePointer(
+                child: AnimatedBuilder(
+                  animation: _pulseCtrl,
+                  builder: (_, __) {
+                    final t = _pulseCtrl.value;
+                    return Container(
+                      width: 60 + 140 * t,
+                      height: 60 + 140 * t,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: AppColor.themeColor.withOpacity(0.18 * (1 - t)),
+                        border: Border.all(
+                          color: AppColor.themeColor.withOpacity(0.5 * (1 - t)),
+                          width: 2,
                         ),
                       ),
-                    const SizedBox(width: 8),
-                    // Control buttons
-                    GestureDetector(
-                      onTap: () =>
-                          _fitMapToAvailableLocations(throttled: false),
-                      child: Container(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(18),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.15),
-                              blurRadius: 4,
-                            ),
-                          ],
-                        ),
-                        child: const Icon(Icons.center_focus_strong,
-                            color: AppColor.themeColor, size: 18),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    GestureDetector(
-                      onTap: _manualRefreshTracking,
-                      child: Container(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: AppColor.themeColor,
-                          borderRadius: BorderRadius.circular(18),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.2),
-                              blurRadius: 4,
-                            ),
-                          ],
-                        ),
-                        child: _isManualRefreshing
-                            ? const Padding(
-                                padding: EdgeInsets.all(9),
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white),
-                              )
-                            : const Icon(Icons.refresh,
-                                color: Colors.white, size: 18),
-                      ),
-                    ),
-                  ],
+                    );
+                  },
                 ),
               ),
             ),
-          ],
-        ),
-      );
-    }
 
-    return Scaffold(
-      body: SafeArea(
-        child: Container(
-          alignment: Alignment.center,
-          color: Colors.white,
-          child: Container(
-            width: MediaQuery.of(context).size.width * 100 / 100,
-            color: Colors.white,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+          // ── Top bar: back + live pill ────────────────────────────────────
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 10,
+            left: 14,
+            right: 14,
+            child: Row(
               children: [
-                Expanded(
-                  child: Container(
-                    width: MediaQuery.of(context).size.width,
-                    child: Stack(
-                      children: [
-                        Container(
-                          width: MediaQuery.of(context).size.width,
-                          child: mapshow == true
-                              ? GoogleMap(
-                                  myLocationButtonEnabled: false,
-                                  myLocationEnabled: false,
-                                  mapType: MapType.normal,
-                                  compassEnabled: false,
-                                  initialCameraPosition: CameraPosition(
-                                    target: initialPosition,
-                                    zoom: 15.0,
-                                  ),
-                                  polylines: _polyline,
-                                  markers: _markers,
-                                  circles: _circles,
-                                  onMapCreated: (GoogleMapController controller) {
-                                    mapController = controller;
-                                    controller.setMapStyle('''
-                                      [
-                                        {
-                                          "featureType": "poi",
-                                          "elementType": "all",
-                                          "stylers": [
-                                            { "visibility": "off" }
-                                          ]
-                                        },
-                                        {
-                                          "featureType": "transit",
-                                          "elementType": "all",
-                                          "stylers": [
-                                            { "visibility": "off" }
-                                          ]
-                                        }
-                                      ]
-                                    ''');
-                                    if (!_controller.isCompleted) {
-                                      _controller.complete(controller);
-                                    }
-                                  },
-                                )
-                              : const Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      CircularProgressIndicator(color: AppColor.themeColor),
-                                      SizedBox(height: 16),
-                                      Text(
-                                        "Loading map...",
-                                        style: TextStyle(color: AppColor.themeColor, fontSize: 16),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                        ),
-
-                        // Status card at the top
-                        Positioned(
-                          top: 10,
-                          left: 10,
-                          right: 10,
-                          child: Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.1),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Padding(
-                                  padding: EdgeInsets.only(top: 2),
-                                  child: Icon(
-                                    Icons.delivery_dining,
-                                    color: AppColor.themeColor,
-                                    size: 24,
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        deliveryStatus,
-                                        style: const TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.black87,
-                                        ),
-                                      ),
-                                      if (currentDistance > 0) ...[
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          "${(currentDistance / 1000).toStringAsFixed(1)} km away",
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.grey[600],
-                                          ),
-                                        ),
-                                      ],
-                                      if (_etaMinutes > 0) ...[
-                                        const SizedBox(height: 6),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 10, vertical: 5),
-                                          decoration: BoxDecoration(
-                                            color: _isPostPickupStatus(
-                                                    widget.bookingStatus)
-                                                ? Colors.green.shade50
-                                                : AppColor.themeColor
-                                                    .withOpacity(0.08),
-                                            borderRadius:
-                                                BorderRadius.circular(20),
-                                            border: Border.all(
-                                              color: _isPostPickupStatus(
-                                                      widget.bookingStatus)
-                                                  ? Colors.green.shade300
-                                                  : AppColor.themeColor
-                                                      .withOpacity(0.3),
-                                              width: 1,
-                                            ),
-                                          ),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Icon(
-                                                Icons.schedule_rounded,
-                                                size: 13,
-                                                color: _isPostPickupStatus(
-                                                        widget.bookingStatus)
-                                                    ? Colors.green.shade700
-                                                    : AppColor.themeColor,
-                                              ),
-                                              const SizedBox(width: 4),
-                                              Text(
-                                                _etaLabel(_isPostPickupStatus(
-                                                    widget.bookingStatus)),
-                                                style: TextStyle(
-                                                  fontSize: 12,
-                                                  fontWeight: FontWeight.w600,
-                                                  color: _isPostPickupStatus(
-                                                          widget.bookingStatus)
-                                                      ? Colors.green.shade700
-                                                      : AppColor.themeColor,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                                GestureDetector(
-                                  onTap: () {
-                                    Navigator.pop(context);
-                                  },
-                                  child: Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: Colors.grey[100],
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: Icon(
-                                      Icons.close,
-                                      color: Colors.grey[600],
-                                      size: 20,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-
-                        // Control buttons
-                        Positioned(
-                          bottom: 20,
-                          right: 20,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // Center button
-                              GestureDetector(
-                                onTap: () {
-                                  _fitMapToAvailableLocations(throttled: false);
-                                },
-                                child: Container(
-                                  width: 56,
-                                  height: 56,
-                                  margin: const EdgeInsets.only(bottom: 12),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(28),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.2),
-                                        blurRadius: 8,
-                                        offset: const Offset(2, 2),
-                                      ),
-                                    ],
-                                  ),
-                                  child: const Icon(
-                                    Icons.center_focus_strong,
-                                    color: AppColor.themeColor,
-                                    size: 24,
-                                  ),
-                                ),
-                              ),
-                              // Refresh button
-                              GestureDetector(
-                                onTap: () async {
-                                  await _manualRefreshTracking();
-                                },
-                                child: Container(
-                                  width: 56,
-                                  height: 56,
-                                  decoration: BoxDecoration(
-                                    color: AppColor.themeColor,
-                                    borderRadius: BorderRadius.circular(28),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.3),
-                                        blurRadius: 8,
-                                        offset: const Offset(2, 2),
-                                      ),
-                                    ],
-                                  ),
-                                  child: _isManualRefreshing
-                                      ? const SizedBox(
-                                          width: 24,
-                                          height: 24,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2.5,
-                                            color: Colors.white,
-                                          ),
-                                        )
-                                      : const Icon(
-                                          Icons.refresh,
-                                          color: Colors.white,
-                                          size: 28,
-                                        ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+                _circleBtn(
+                  icon: Icons.arrow_back_ios_new_rounded,
+                  onTap: () => Navigator.pop(context),
+                ),
+                const Spacer(),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(30),
+                    boxShadow: [
+                      BoxShadow(
+                          color: Colors.black.withOpacity(0.12),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2)),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                            color: AppColor.successCOlor,
+                            shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        _isSearching ? 'Finding a partner' : 'Live tracking',
+                        style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.black87),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-        ),
+
+          // ── ETA rail on the right edge ───────────────────────────────────
+          if (!_isSearching && etaMin > 0)
+            Positioned(
+              right: 0,
+              top: MediaQuery.of(context).size.height * 0.30,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    bottomLeft: Radius.circular(16),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.black.withOpacity(0.15),
+                        blurRadius: 12,
+                        offset: const Offset(-2, 4)),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                        isPostPickup
+                            ? Icons.local_shipping_rounded
+                            : Icons.two_wheeler_rounded,
+                        size: 16,
+                        color: AppColor.themeColor),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$etaMin',
+                      style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                        height: 1,
+                        color: AppColor.themeColor,
+                      ),
+                    ),
+                    const Text('min',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black54)),
+                    const SizedBox(height: 4),
+                    Text(
+                      isPostPickup ? 'to drop' : 'to pickup',
+                      style:
+                          const TextStyle(fontSize: 9.5, color: Colors.black45),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // ── Recenter / refresh FABs ─────────────────────────────────────
+          if (!_isSearching)
+            Positioned(
+              right: 16,
+              bottom: _sheetHeight(context) + 14,
+              child: Column(
+                children: [
+                  _circleBtn(
+                    icon: Icons.my_location_rounded,
+                    onTap: _recenter,
+                  ),
+                  const SizedBox(height: 10),
+                  _circleBtn(
+                    icon: Icons.refresh_rounded,
+                    filled: true,
+                    busy: _isManualRefreshing,
+                    onTap: _manualRefreshTracking,
+                  ),
+                ],
+              ),
+            ),
+
+          // ── Bottom sheet ────────────────────────────────────────────────
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _isSearching ? _searchingSheet() : _trackingSheet(isPostPickup),
+          ),
+        ],
       ),
     );
   }
 
-  // Future<void> _getCurrentPosition(type) async {
-  //   final hasPermission = await _handleLocationPermission();
-  //   if (!hasPermission) return;
-  //   await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high)
-  //       .then((Position position) {
-  //     setState(() => _currentPosition = position);
-  //     _getAddressFromLatLng(_currentPosition!, type);
-  //   }).catchError((e) {
-  //     print("Error getting location: $e");
-  //     setLoction();
-  //   });
-  // }
+  double _sheetHeight(BuildContext context) {
+    if (_isSearching) return 200;
+    double h = 180;
+    if (widget.driverName != null && widget.driverName!.trim().isNotEmpty) h += 64;
+    if (_banners.isNotEmpty) h += 104;
+    return h;
+  }
+
+  Widget _circleBtn({
+    required IconData icon,
+    required VoidCallback onTap,
+    bool filled = false,
+    bool busy = false,
+  }) {
+    return GestureDetector(
+      onTap: busy ? null : onTap,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: filled ? AppColor.themeColor : Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 8,
+                offset: const Offset(0, 2)),
+          ],
+        ),
+        child: busy
+            ? const Padding(
+                padding: EdgeInsets.all(12),
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white),
+              )
+            : Icon(icon,
+                size: 20,
+                color: filled ? Colors.white : AppColor.themeColor),
+      ),
+    );
+  }
+
+  // ── Searching sheet ──────────────────────────────────────────────────────
+  Widget _searchingSheet() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+          BoxShadow(color: Colors.black26, blurRadius: 18, offset: Offset(0, -4)),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _grabHandle(),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              SizedBox(
+                width: 34,
+                height: 34,
+                child: AnimatedBuilder(
+                  animation: _pulseCtrl,
+                  builder: (_, __) => CircularProgressIndicator(
+                    strokeWidth: 3,
+                    value: null,
+                    color: AppColor.themeColor
+                        .withOpacity(0.5 + 0.5 * _pulseCtrl.value),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Text('Finding you a delivery partner',
+                        style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.black87)),
+                    SizedBox(height: 3),
+                    Text('Hang tight — this usually takes under a minute',
+                        style:
+                            TextStyle(fontSize: 12, color: Colors.black54)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _bannerStrip(),
+        ],
+      ),
+    );
+  }
+
+  // ── Tracking sheet ───────────────────────────────────────────────────────
+  Widget _trackingSheet(bool isPostPickup) {
+    final km = currentDistance > 0
+        ? '${(currentDistance / 1000).toStringAsFixed(1)} km away'
+        : null;
+    final hasDriver =
+        widget.driverName != null && widget.driverName!.trim().isNotEmpty;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 20),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+          BoxShadow(color: Colors.black26, blurRadius: 18, offset: Offset(0, -4)),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _grabHandle(),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: (isPostPickup
+                          ? AppColor.successCOlor
+                          : AppColor.themeColor)
+                      .withOpacity(0.10),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  isPostPickup
+                      ? Icons.local_shipping_rounded
+                      : Icons.two_wheeler_rounded,
+                  color: isPostPickup
+                      ? AppColor.successCOlor
+                      : AppColor.themeColor,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      deliveryStatus,
+                      style: const TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.black87),
+                    ),
+                    if (km != null) ...[
+                      const SizedBox(height: 2),
+                      Text(km,
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.black54)),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _stepBar(),
+          if (hasDriver) ...[
+            const SizedBox(height: 14),
+            const Divider(height: 1),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 20,
+                  backgroundColor: AppColor.themeColor.withOpacity(0.12),
+                  child: Text(
+                    widget.driverName!.trim().isNotEmpty
+                        ? widget.driverName!.trim()[0].toUpperCase()
+                        : '?',
+                    style: const TextStyle(
+                        color: AppColor.themeColor,
+                        fontWeight: FontWeight.w800),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(widget.driverName!,
+                          style: const TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.black87)),
+                      Text(
+                        widget.vehicleName?.toString().trim().isNotEmpty == true
+                            ? widget.vehicleName!
+                            : 'Your delivery partner',
+                        style: const TextStyle(
+                            fontSize: 11.5, color: Colors.black54),
+                      ),
+                    ],
+                  ),
+                ),
+                if (widget.driverPhone != null &&
+                    widget.driverPhone!.trim().isNotEmpty)
+                  GestureDetector(
+                    onTap: () => openDialPad(widget.driverPhone!.trim()),
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: const BoxDecoration(
+                        color: AppColor.successCOlor,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.call_rounded,
+                          color: Colors.white, size: 18),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+          if (_banners.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            _bannerStrip(),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _grabHandle() => Container(
+        width: 42,
+        height: 4,
+        decoration: BoxDecoration(
+          color: Colors.black12,
+          borderRadius: BorderRadius.circular(4),
+        ),
+      );
+
+  // Step progress: Accepted → Arrived → Picked up → On the way → Delivered
+  Widget _stepBar() {
+    const steps = ['Accepted', 'Arrived', 'Picked up', 'On the way', 'Delivered'];
+    final s = (widget.bookingStatus ?? '').trim().toLowerCase();
+    int current = 0;
+    if (s.contains('arriv')) current = 1;
+    if (s.contains('pickup') || s == 'picked up' || s == 'pickedup') current = 2;
+    if (s.contains('ongoing') || s.contains('on the way') || s == 'ontheway') {
+      current = 3;
+    }
+    if (s.contains('deliver') || s.contains('complete')) current = 4;
+
+    return Row(
+      children: List.generate(steps.length * 2 - 1, (i) {
+        if (i.isOdd) {
+          final done = (i ~/ 2) < current;
+          return Expanded(
+            child: Container(
+              height: 2,
+              color: done ? AppColor.themeColor : Colors.black12,
+            ),
+          );
+        }
+        final idx = i ~/ 2;
+        final done = idx <= current;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: done ? AppColor.themeColor : Colors.white,
+                border: Border.all(
+                    color: done ? AppColor.themeColor : Colors.black26,
+                    width: 2),
+              ),
+              child: done
+                  ? const Icon(Icons.check, size: 7, color: Colors.white)
+                  : null,
+            ),
+          ],
+        );
+      }),
+    );
+  }
+
+  Widget _bannerStrip() {
+    if (_banners.isEmpty) return const SizedBox.shrink();
+    return SizedBox(
+      height: 92,
+      child: PageView.builder(
+        controller: _bannerPage,
+        itemCount: _banners.length,
+        onPageChanged: (i) => _bannerIndex = i,
+        itemBuilder: (_, i) {
+          final b = _banners[i];
+          return GestureDetector(
+            onTap: () async {
+              final actionType = (b['action_type'] ?? 'url').toString();
+              final actionValue = (b['action_value'] ?? '').toString();
+              if (actionType == 'url' && actionValue.isNotEmpty) {
+                final uri = Uri.tryParse(actionValue);
+                if (uri != null && await canLaunchUrl(uri)) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+              }
+            },
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 2),
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                color: AppColor.themeColor.withOpacity(0.08),
+              ),
+              child: Image.network(
+                '${AppConfigProvider.imgUrl}${b['image']}',
+                fit: BoxFit.cover,
+                width: double.infinity,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ── Embedded (unchanged layout, benefits from the dotted polylines) ──────
+  Widget _buildEmbed(BuildContext context) {
+    final bool isPostPickup = _isPostPickupStatus(widget.bookingStatus);
+    return Container(
+      width: MediaQuery.of(context).size.width,
+      color: Colors.white,
+      child: Stack(
+        children: [
+          mapshow
+              ? GoogleMap(
+                  myLocationButtonEnabled: false,
+                  myLocationEnabled: false,
+                  mapType: MapType.normal,
+                  compassEnabled: false,
+                  zoomControlsEnabled: false,
+                  scrollGesturesEnabled: !_isSearching,
+                  zoomGesturesEnabled: !_isSearching,
+                  rotateGesturesEnabled: false,
+                  tiltGesturesEnabled: false,
+                  initialCameraPosition: CameraPosition(
+                    target: _isSearching && pickupLocation != null
+                        ? pickupLocation!
+                        : initialPosition,
+                    zoom: 15.0,
+                  ),
+                  polylines: _polyline,
+                  markers: _markers,
+                  circles: _circles,
+                  onCameraMoveStarted: _onCameraMoveStarted,
+                  onMapCreated: (GoogleMapController controller) {
+                    mapController = controller;
+                    controller.setMapStyle(kPorterMapStyle);
+                    if (!_controller.isCompleted) {
+                      _controller.complete(controller);
+                    }
+                  },
+                )
+              : const Center(
+                  child: CircularProgressIndicator(color: AppColor.themeColor),
+                ),
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              color: Colors.white.withOpacity(0.95),
+              child: Row(
+                children: [
+                  Icon(
+                    isPostPickup
+                        ? Icons.local_shipping_rounded
+                        : Icons.directions_bike_rounded,
+                    color: isPostPickup
+                        ? AppColor.successCOlor
+                        : AppColor.themeColor,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      deliveryStatus,
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87),
+                    ),
+                  ),
+                  if (_etaMinutes > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: AppColor.themeColor.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '~$_etaMinutes min',
+                        style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppColor.themeColor),
+                      ),
+                    ),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: _recenter,
+                    child: const Icon(Icons.center_focus_strong,
+                        color: AppColor.themeColor, size: 20),
+                  ),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: _manualRefreshTracking,
+                    child: _isManualRefreshing
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: AppColor.themeColor),
+                          )
+                        : const Icon(Icons.refresh,
+                            color: AppColor.themeColor, size: 20),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<bool> _handleLocationPermission() async {
     bool serviceEnabled;
@@ -928,33 +1221,6 @@ class _MapImageState extends State<MapImageScreen> {
     return true;
   }
 
-  // Future<void> _getAddressFromLatLng(Position position, type) async {
-  //   await placemarkFromCoordinates(
-  //           _currentPosition!.latitude, _currentPosition!.longitude)
-  //       .then((List<Placemark> placemarks) {
-  //     Placemark place = placemarks[0];
-  //     print(
-  //         "Current position - Lat: ${_currentPosition!.latitude}, Long: ${_currentPosition!.longitude}");
-  //     setState(() {
-  //       long = _currentPosition!.longitude;
-  //       lat = _currentPosition!.latitude;
-  //       initialPosition =
-  //           LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
-  //       latitudex = _currentPosition!.latitude;
-  //       longtitudex = _currentPosition!.longitude;
-  //       mapshow = true;
-  //       controller.text =
-  //           '${place.street}, ${place.subLocality}, ${place.subAdministrativeArea}, ${place.postalCode}';
-  //       isApiCalling = false;
-  //     });
-  //     // Call API after map is ready
-  //     getMakeApiCall(_currentPosition!.latitude, _currentPosition!.longitude);
-  //   }).catchError((e) {
-  //     print("Error getting address: $e");
-  //     setLoction();
-  //   });
-  // }
-
   setLoction() {
     setState(() {
       latitudex = 22.7196;
@@ -965,7 +1231,6 @@ class _MapImageState extends State<MapImageScreen> {
       isApiCalling = false;
       mapshow = true;
     });
-    // getMakeApiCall(22.7196, 75.8577);
   }
 
   // Calculate bearing for scooter rotation
@@ -979,12 +1244,11 @@ class _MapImageState extends State<MapImageScreen> {
     double y = sin(dLon) * cos(lat2);
     double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
     double bearing = atan2(y, x);
-    bearing = bearing * 180 / pi; // Convert to degrees
+    bearing = bearing * 180 / pi;
     bearing = (bearing + 360) % 360;
     return bearing;
   }
 
-  // Enhanced function to calculate distance between two points
   double calculateDistance(LatLng point1, LatLng point2) {
     return Geolocator.distanceBetween(
       point1.latitude,
@@ -998,6 +1262,26 @@ class _MapImageState extends State<MapImageScreen> {
     if (_lastProcessedDriverLocation == null) return true;
     final moved = calculateDistance(_lastProcessedDriverLocation!, latest);
     return moved >= 5; // meters
+  }
+
+  // Quadratic-bezier arc between two points, sampled to a smooth dotted curve.
+  List<LatLng> _curve(LatLng a, LatLng b, {double bend = 0.2}) {
+    final dLat = b.latitude - a.latitude;
+    final dLng = b.longitude - a.longitude;
+    // control point = midpoint pushed perpendicular to the a→b vector
+    final cLat = (a.latitude + b.latitude) / 2 + dLng * bend;
+    final cLng = (a.longitude + b.longitude) / 2 - dLat * bend;
+    const seg = 26;
+    final pts = <LatLng>[];
+    for (int i = 0; i <= seg; i++) {
+      final t = i / seg;
+      final u = 1 - t;
+      pts.add(LatLng(
+        u * u * a.latitude + 2 * u * t * cLat + t * t * b.latitude,
+        u * u * a.longitude + 2 * u * t * cLng + t * t * b.longitude,
+      ));
+    }
+    return pts;
   }
 
   bool _shouldRefreshRoute({
@@ -1022,7 +1306,7 @@ class _MapImageState extends State<MapImageScreen> {
         elapsed >= minRefreshSeconds;
   }
 
-  Future<List<LatLng>> _getCachedRoute({
+  Future<_RouteResult> _getCachedRoute({
     required String key,
     required LatLng start,
     required LatLng end,
@@ -1037,21 +1321,26 @@ class _MapImageState extends State<MapImageScreen> {
       minRefreshSeconds: minRefreshSeconds,
     );
 
-    if (!shouldRefresh) return _routeCache[key]!;
+    if (!shouldRefresh && _routeMetaCache[key] != null) {
+      return _routeMetaCache[key]!;
+    }
     if (_routeFetching[key] == true) {
-      return _routeCache[key] ?? [start, end];
+      return _routeMetaCache[key] ??
+          _RouteResult(_routeCache[key] ?? [start, end]);
     }
 
     _routeFetching[key] = true;
     try {
-      final route = await getRouteCoordinates(start, end);
-      _routeCache[key] = route;
+      final result = await getRouteCoordinates(start, end);
+      _routeCache[key] = result.points;
+      _routeMetaCache[key] = result;
       _routeStartCache[key] = start;
       _routeEndCache[key] = end;
       _routeFetchedAt[key] = DateTime.now();
-      return route;
+      return result;
     } catch (_) {
-      return _routeCache[key] ?? [start, end];
+      return _routeMetaCache[key] ??
+          _RouteResult(_routeCache[key] ?? _curve(start, end));
     } finally {
       _routeFetching[key] = false;
     }
@@ -1061,6 +1350,7 @@ class _MapImageState extends State<MapImageScreen> {
     const keys = ['active_leg', 'pickup_to_driver'];
     for (final key in keys) {
       _routeCache.remove(key);
+      _routeMetaCache.remove(key);
       _routeStartCache.remove(key);
       _routeEndCache.remove(key);
       _routeFetchedAt.remove(key);
@@ -1101,17 +1391,25 @@ class _MapImageState extends State<MapImageScreen> {
     final normalized = (status ?? "").trim().toLowerCase();
     return normalized == "pickedup" ||
         normalized == "picked up" ||
+        normalized == "pickup" ||
         normalized == "ontheway" ||
         normalized == "on the way" ||
+        normalized == "ongoing" ||
         normalized == "delivered" ||
         normalized == "completed";
   }
 
   void _updateDeliveryStatus(double distanceMeters,
       {required bool isPostPickup}) {
-    // ETA: city average 25 km/h = 416.7 m/min
-    _etaMinutes = distanceMeters > 0
-        ? (distanceMeters / 416.7).ceil().clamp(1, 999)
+    // ETA = distance ÷ a fixed assumed speed (never live traffic time).
+    // Prefer the road-route distance; fall back to straight-line.
+    final double etaDistanceM =
+        (_roadDistanceMeters != null && _roadDistanceMeters! > 0)
+            ? _roadDistanceMeters!
+            : distanceMeters;
+    final double metresPerMin = _avgSpeedKmph * 1000 / 60; // e.g. 22 km/h → ~366.7
+    _etaMinutes = etaDistanceM > 0
+        ? (etaDistanceM / metresPerMin).ceil().clamp(1, 999)
         : 0;
 
     if (distanceMeters <= 0) {
@@ -1134,16 +1432,9 @@ class _MapImageState extends State<MapImageScreen> {
     }
   }
 
-  String _etaLabel(bool isPostPickup) {
-    if (_etaMinutes <= 0) return '';
-    final arrival = DateTime.now().add(Duration(minutes: _etaMinutes));
-    final h = arrival.hour.toString().padLeft(2, '0');
-    final m = arrival.minute.toString().padLeft(2, '0');
-    final phase = isPostPickup ? 'Delivery by' : 'Arrives by';
-    return '$phase $h:$m  (~$_etaMinutes min)';
-  }
-
   void _fitMapToAvailableLocations({required bool throttled}) {
+    if (_isSearching) return;
+    if (throttled && _userMovedMap) return;
     if (throttled && _lastCameraFitAt != null) {
       final elapsed = DateTime.now().difference(_lastCameraFitAt!);
       if (elapsed.inSeconds < 4) return;
@@ -1156,8 +1447,8 @@ class _MapImageState extends State<MapImageScreen> {
 
     if (points.isEmpty) return;
     if (points.length == 1) {
-      mapController
-          ?.animateCamera(CameraUpdate.newLatLngZoom(points.first, 16));
+      _animateCamera(CameraUpdate.newLatLngZoom(points.first, 16));
+      _lastCameraFitAt = DateTime.now();
       return;
     }
 
@@ -1178,65 +1469,18 @@ class _MapImageState extends State<MapImageScreen> {
       southwest: LatLng(minLat - pad, minLng - pad),
       northeast: LatLng(maxLat + pad, maxLng + pad),
     );
-    mapController?.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80));
+    _animateCamera(CameraUpdate.newLatLngBounds(bounds, 80));
     _lastCameraFitAt = DateTime.now();
   }
 
-  // Smart zoom function based on distance
-  void _smartZoom(LatLng userLocation, LatLng driverLocation) {
-    double distance = calculateDistance(userLocation, driverLocation);
-    double zoomLevel;
-
-    if (distance < 200) {
-      zoomLevel = 18.0;
-      deliveryStatus = "Driver is arriving!";
-    } else if (distance < 500) {
-      zoomLevel = 17.0;
-      deliveryStatus = "Driver is nearby";
-    } else if (distance < 1000) {
-      zoomLevel = 16.0;
-      deliveryStatus = "Driver is approaching";
-    } else if (distance < 3000) {
-      zoomLevel = 15.0;
-      deliveryStatus = "Driver is on the way";
-    } else {
-      zoomLevel = 14.0;
-      deliveryStatus = "Driver is on the way";
-    }
-
-    // Calculate bounds to show both locations
-    double minLat = min(userLocation.latitude, driverLocation.latitude);
-    double maxLat = max(userLocation.latitude, driverLocation.latitude);
-    double minLng = min(userLocation.longitude, driverLocation.longitude);
-    double maxLng = max(userLocation.longitude, driverLocation.longitude);
-
-    // Add padding
-    double padding = 0.005;
-    LatLngBounds bounds = LatLngBounds(
-      southwest: LatLng(minLat - padding, minLng - padding),
-      northeast: LatLng(maxLat + padding, maxLng + padding),
-    );
-
-    // Animate to show both locations
-    mapController?.animateCamera(
-      CameraUpdate.newLatLngBounds(bounds, 100.0),
-    );
-  }
-
-  // Center function for manual centering
-  void _centerMapOnBothLocations() {
-    _fitMapToAvailableLocations(throttled: false);
-  }
-
-  // Enhanced route function with better path visualization
-  Future<List<LatLng>> getRouteCoordinates(LatLng start, LatLng end) async {
+  // Enhanced route function — also pulls road duration/distance from the
+  // Directions response so the ETA on screen reflects the actual road network.
+  Future<_RouteResult> getRouteCoordinates(LatLng start, LatLng end) async {
     String url = "https://maps.googleapis.com/maps/api/directions/json?"
         "origin=${start.latitude},${start.longitude}&"
         "destination=${end.latitude},${end.longitude}&"
         "mode=driving&"
         "alternatives=false&"
-        
-        
         "avoid=tolls&"
         "key=$googleApiKey";
 
@@ -1245,17 +1489,32 @@ class _MapImageState extends State<MapImageScreen> {
       if (response.statusCode == 200) {
         Map<String, dynamic> data = json.decode(response.body);
         if (data['status'] == 'OK') {
-          String encodedPolyline =
-              data['routes'][0]['overview_polyline']['points'];
-          return _decodePolyline(encodedPolyline);
+          final route = data['routes'][0];
+          final String encodedPolyline = route['overview_polyline']['points'];
+          int? durSec;
+          double? distM;
+          final legs = route['legs'];
+          if (legs is List && legs.isNotEmpty) {
+            durSec = 0;
+            distM = 0;
+            for (final leg in legs) {
+              durSec = durSec! + ((leg['duration']?['value'] as num?)?.round() ?? 0);
+              distM = distM! + ((leg['distance']?['value'] as num?)?.toDouble() ?? 0);
+            }
+          }
+          return _RouteResult(
+            _decodePolyline(encodedPolyline),
+            durationSec: durSec,
+            distanceMeters: distM,
+          );
         }
       }
     } catch (e) {
       print("Error getting route: $e");
     }
 
-    // Return straight line if route fetching fails
-    return [start, end];
+    // Smooth dotted arc if the route lookup fails — never a hard straight line.
+    return _RouteResult(_curve(start, end));
   }
 
   List<LatLng> _decodePolyline(String encoded) {
@@ -1463,183 +1722,4 @@ class _MapImageState extends State<MapImageScreen> {
       print("Can't open dial pad.");
     }
   }
-}
-
-class MockTrackingMap extends StatelessWidget {
-  final String status;
-  final String vehicleName;
-  const MockTrackingMap({
-    super.key,
-    required this.status,
-    required this.vehicleName,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    return Container(
-      color: const Color(0xFFF1F5F9), // modern slate-100 background
-      child: Stack(
-        children: [
-          // Stylized roads
-          Positioned.fill(
-            child: CustomPaint(
-              painter: _RoadsPainter(),
-            ),
-          ),
-          
-          // Live Pulse overlay
-          Positioned(
-            top: 20,
-            left: 20,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: const [
-                  BoxShadow(color: Colors.black12, blurRadius: 6),
-                ],
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Colors.green,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  const Text(
-                    "Live GPS Tracking Active",
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                      fontFamily: 'Poppins',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Pickup Marker
-          Positioned(
-            left: size.width * 0.15,
-            top: size.height * 0.10,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Text("Pickup", style: TextStyle(color: Colors.white, fontSize: 8, fontFamily: 'Poppins')),
-                ),
-                const Icon(Icons.location_on, color: Colors.green, size: 28),
-              ],
-            ),
-          ),
-
-          // Drop Marker
-          Positioned(
-            left: size.width * 0.70,
-            top: size.height * 0.32,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Text("Dropoff", style: TextStyle(color: Colors.white, fontSize: 8, fontFamily: 'Poppins')),
-                ),
-                const Icon(Icons.location_on, color: Colors.red, size: 28),
-              ],
-            ),
-          ),
-
-          // Driver Marker
-          Positioned(
-            left: size.width * 0.40,
-            top: size.height * 0.18,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.blue,
-                    borderRadius: BorderRadius.circular(4),
-                    boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 2)],
-                  ),
-                  child: Text(
-                    "Driver ($status)",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 8,
-                      fontWeight: FontWeight.bold,
-                      fontFamily: 'Poppins',
-                    ),
-                  ),
-                ),
-                const Icon(Icons.local_shipping, color: Colors.blue, size: 32),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RoadsPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final borderPaint = Paint()
-      ..color = const Color(0xFFE2E8F0)
-      ..strokeWidth = 24
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-
-    final paint = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 20
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-
-    // Curved road path connecting the points
-    final path = Path()
-      ..moveTo(size.width * 0.20, size.height * 0.15)
-      ..cubicTo(
-        size.width * 0.45,
-        size.height * 0.10,
-        size.width * 0.35,
-        size.height * 0.30,
-        size.width * 0.75,
-        size.height * 0.36,
-      );
-
-    canvas.drawPath(path, borderPaint);
-    canvas.drawPath(path, paint);
-
-    // Dotted route line overlay
-    final dashPaint = Paint()
-      ..color = const Color(0xFF3B82F6)
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-
-    canvas.drawPath(path, dashPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
